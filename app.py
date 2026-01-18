@@ -24,6 +24,32 @@ DB_PATH = "rice_mill_v2.db"
 WEIGHT_PER_BAG = 0.51  # Quintals per bag (51 kg)
 DIFFERENCE_THRESHOLD = 2.0  # Quintals - flag if difference exceeds this
 
+def get_kms_year_from_date(entry_date):
+    """
+    Auto-detect KMS year from date.
+    KMS year runs from October to September.
+    e.g., Oct 2025 - Sep 2026 = "2025-26"
+    """
+    if isinstance(entry_date, str):
+        entry_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+    
+    year = entry_date.year
+    month = entry_date.month
+    
+    # If month is October (10) or later, KMS year starts this year
+    # If month is January-September, KMS year started previous year
+    if month >= 10:  # Oct, Nov, Dec
+        kms_start_year = year
+    else:  # Jan to Sep
+        kms_start_year = year - 1
+    
+    kms_end_year = kms_start_year + 1
+    return f"{kms_start_year}-{str(kms_end_year)[-2:]}"
+
+def get_current_kms_year():
+    """Get KMS year for current date"""
+    return get_kms_year_from_date(date.today())
+
 # ============== DATABASE FUNCTIONS ==============
 
 def get_connection():
@@ -404,10 +430,18 @@ def show_sidebar():
         
         # KMS Year Selection
         st.subheader("📅 KMS Year")
-        current_year = datetime.now().year
-        year_options = [f"{y}-{str(y+1)[-2:]}" for y in range(current_year-2, current_year+3)]
-        kms_year = st.selectbox("Select Year", year_options, index=2, label_visibility="collapsed")
+        current_kms = get_current_kms_year()
+        
+        # Generate options around current KMS year
+        current_start = int(current_kms.split("-")[0])
+        year_options = [f"{y}-{str(y+1)[-2:]}" for y in range(current_start-2, current_start+2)]
+        
+        # Default to current KMS year
+        default_idx = year_options.index(current_kms) if current_kms in year_options else 0
+        kms_year = st.selectbox("Select Year", year_options, index=default_idx, label_visibility="collapsed")
         st.session_state['kms_year'] = kms_year
+        
+        st.caption(f"Current KMS: {current_kms}")
         
         st.markdown("---")
         
@@ -434,6 +468,10 @@ def show_employee_dashboard():
         
         with col1:
             entry_date = st.date_input("Date", value=date.today(), max_value=date.today())
+            
+            # Auto-detect KMS year from entry date
+            entry_kms_year = get_kms_year_from_date(entry_date)
+            st.caption(f"📅 KMS Year: **{entry_kms_year}**")
             
             # Check if date is too old
             days_old = (date.today() - entry_date).days
@@ -513,7 +551,7 @@ def show_employee_dashboard():
             else:
                 # Check for duplicate
                 if check_duplicate_entry("Employee_Arrivals", entry_date, selected_vehicle, 
-                                        selected_mandi, kms_year):
+                                        selected_mandi, entry_kms_year):
                     st.warning("⚠️ Similar entry exists for this date/vehicle/mandi. Submit anyway?")
                     if st.button("Yes, Submit", key="confirm_dup"):
                         pass  # Continue below
@@ -528,7 +566,7 @@ def show_employee_dashboard():
                         (date, kms_year, mandi_name, vehicle_number, bags, weight_quintals,
                          godown, expected_weight, difference, entered_by, remarks)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (entry_date, kms_year, selected_mandi, selected_vehicle, bags,
+                    """, (entry_date, entry_kms_year, selected_mandi, selected_vehicle, bags,
                           weight, selected_godown, expected_weight, difference, username, remarks))
                     conn.commit()
                     st.success("✅ Entry saved successfully!")
@@ -665,6 +703,10 @@ def show_admin_dashboard():
             
             entry_date = st.date_input("Date", value=date.today(), key="admin_date")
             
+            # Auto-detect KMS year from entry date
+            entry_kms_year = get_kms_year_from_date(entry_date)
+            st.caption(f"📅 KMS Year: **{entry_kms_year}**")
+            
             mandis_df = get_mandis()
             if not mandis_df.empty:
                 mandi_options = mandis_df['mandi_name'].tolist()
@@ -701,12 +743,12 @@ def show_admin_dashboard():
                             (date, kms_year, mandi_name, vehicle_number, ac_note, 
                              quantity_quintals, entered_by, remarks)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (entry_date, kms_year, selected_mandi, selected_vehicle,
+                        """, (entry_date, entry_kms_year, selected_mandi, selected_vehicle,
                               ac_note, quantity, username, remarks))
                         conn.commit()
                         
                         # Update master stock
-                        update_master_stock(kms_year)
+                        update_master_stock(entry_kms_year)
                         
                         st.success("✅ Entry added!")
                         st.rerun()
