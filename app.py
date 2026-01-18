@@ -111,6 +111,11 @@ def get_vehicles():
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM Vehicle_Registry ORDER BY vehicle_number", conn)
     conn.close()
+    
+    # Convert date strings to date objects
+    if not df.empty and 'puc_expiry_date' in df.columns:
+        df['puc_expiry_date'] = pd.to_datetime(df['puc_expiry_date'], errors='coerce').dt.date
+    
     return df
 
 def get_arrivals(kms_year):
