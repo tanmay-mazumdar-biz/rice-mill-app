@@ -140,19 +140,6 @@ def init_database():
             VALUES (?, ?, 'admin', 'Administrator')
         """, ("admin", admin_hash))
     
-    # Create default employee accounts if not exists
-    cursor.execute("SELECT COUNT(*) FROM Users WHERE role = 'employee'")
-    if cursor.fetchone()[0] == 0:
-        emp_hash = hashlib.sha256("emp123".encode()).hexdigest()
-        cursor.execute("""
-            INSERT INTO Users (username, password_hash, role, full_name)
-            VALUES (?, ?, 'employee', 'Employee 1')
-        """, ("emp1", emp_hash))
-        cursor.execute("""
-            INSERT INTO Users (username, password_hash, role, full_name)
-            VALUES (?, ?, 'employee', 'Employee 2')
-        """, ("emp2", emp_hash))
-    
     # Create default godowns if not exists
     cursor.execute("SELECT COUNT(*) FROM Settings_Godown")
     if cursor.fetchone()[0] == 0:
