@@ -397,25 +397,31 @@ with tab1:
                     conn.close()
         
         with col2:
-            # Delete arrival
-            arrival_options = [f"{arrivals_df.iloc[i]['date']} - {arrivals_df.iloc[i]['vehicle_number']} ({arrivals_df.iloc[i]['quantity_quintals']}Q)" 
-                              for i in range(len(arrivals_df))]
-            
-            if arrival_options:
-                selected_arrival_idx = st.selectbox(
+            # Delete arrival - create a simple list of descriptions
+            if len(arrivals_df) > 0:
+                # Create display options
+                arrival_display_list = []
+                for idx in range(len(arrivals_df)):
+                    row = arrivals_df.iloc[idx]
+                    display_text = f"{row['date']} | {row['vehicle_number']} | {row['quantity_quintals']}Q"
+                    arrival_display_list.append(display_text)
+                
+                selected_arrival = st.selectbox(
                     "Select arrival to delete", 
-                    range(len(arrival_options)),
-                    format_func=lambda x: arrival_options[x],
+                    arrival_display_list,
                     key="delete_arrival_select"
                 )
                 
                 if st.button("🗑️ Delete Arrival", type="secondary", use_container_width=True):
+                    # Find the index of selected arrival
+                    selected_idx = arrival_display_list.index(selected_arrival)
+                    
                     conn = get_connection()
                     cursor = conn.cursor()
                     
                     try:
-                        arrival_id = arrivals_df.iloc[selected_arrival_idx]['id']
-                        arrival_date = arrivals_df.iloc[selected_arrival_idx]['date']
+                        arrival_id = arrivals_df.iloc[selected_idx]['id']
+                        arrival_date = arrivals_df.iloc[selected_idx]['date']
                         
                         cursor.execute("DELETE FROM Arrivals WHERE id = ?", (arrival_id,))
                         conn.commit()
