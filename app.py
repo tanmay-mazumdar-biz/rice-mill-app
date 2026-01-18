@@ -339,21 +339,109 @@ with tab1:
     
     arrivals_df = get_arrivals(kms_year)
     if not arrivals_df.empty:
-        # Format display
-        display_df = arrivals_df[['date', 'ac_note_number', 'mandi_name', 'vehicle_number', 
+        # Format display - keep id for reference but don't show it
+        display_df = arrivals_df[['date', 'ac_note_number', 'mandi_name', 'distance', 'vehicle_number', 
                                    'driver_name', 'bag_count', 'quantity_quintals']].copy()
-        display_df.columns = ['Date', 'AC Note', 'Mandi', 'Vehicle', 'Driver', 'Bags', 'Quantity (Q)']
+        display_df.columns = ['Date', 'AC Note', 'Mandi', 'Distance (km)', 'Vehicle', 'Driver', 'Bags', 'Quantity (Q)']
         
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        
-        # Download button
-        excel_data = to_excel(display_df)
-        st.download_button(
-            label="📥 Download Arrivals (Excel)",
-            data=excel_data,
-            file_name=f"arrivals_{kms_year}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        # Editable table
+        edited_arrivals = st.data_editor(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=['Date'],
+            column_config={
+                "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
+                "AC Note": st.column_config.TextColumn("AC Note"),
+                "Mandi": st.column_config.TextColumn("Mandi"),
+                "Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.1f"),
+                "Vehicle": st.column_config.TextColumn("Vehicle"),
+                "Driver": st.column_config.TextColumn("Driver"),
+                "Bags": st.column_config.NumberColumn("Bags", format="%d"),
+                "Quantity (Q)": st.column_config.NumberColumn("Quantity (Q)", format="%.2f"),
+            },
+            key="arrivals_editor"
         )
+        
+        col1, col2, col3 = st.columns([2, 2, 1])
+        
+        with col1:
+            if st.button("💾 Save Changes", type="primary", use_container_width=True, key="save_arrivals"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                try:
+                    for idx, row in edited_arrivals.iterrows():
+                        arrival_id = arrivals_df.iloc[idx]['id']
+                        arrival_date = arrivals_df.iloc[idx]['date']
+                        
+                        cursor.execute("""
+                            UPDATE Arrivals 
+                            SET ac_note_number = ?, mandi_name = ?, distance = ?, 
+                                vehicle_number = ?, driver_name = ?, bag_count = ?, quantity_quintals = ?
+                            WHERE id = ?
+                        """, (row['AC Note'], row['Mandi'], row['Distance (km)'], 
+                              row['Vehicle'], row['Driver'], int(row['Bags']), row['Quantity (Q)'], arrival_id))
+                        
+                        # Update master stock for affected date
+                        update_master_stock(arrival_date, kms_year)
+                    
+                    conn.commit()
+                    st.success("✅ Arrival records updated successfully!")
+                    st.rerun()
+                    
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"❌ Error updating arrivals: {e}")
+                finally:
+                    conn.close()
+        
+        with col2:
+            # Delete arrival
+            arrival_options = [f"{arrivals_df.iloc[i]['date']} - {arrivals_df.iloc[i]['vehicle_number']} ({arrivals_df.iloc[i]['quantity_quintals']}Q)" 
+                              for i in range(len(arrivals_df))]
+            
+            if arrival_options:
+                selected_arrival_idx = st.selectbox(
+                    "Select arrival to delete", 
+                    range(len(arrival_options)),
+                    format_func=lambda x: arrival_options[x],
+                    key="delete_arrival_select"
+                )
+                
+                if st.button("🗑️ Delete Arrival", type="secondary", use_container_width=True):
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    
+                    try:
+                        arrival_id = arrivals_df.iloc[selected_arrival_idx]['id']
+                        arrival_date = arrivals_df.iloc[selected_arrival_idx]['date']
+                        
+                        cursor.execute("DELETE FROM Arrivals WHERE id = ?", (arrival_id,))
+                        conn.commit()
+                        
+                        # Update master stock for affected date
+                        update_master_stock(arrival_date, kms_year)
+                        
+                        st.success("✅ Arrival deleted successfully!")
+                        st.rerun()
+                        
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Error deleting arrival: {e}")
+                    finally:
+                        conn.close()
+        
+        with col3:
+            # Download button
+            excel_data = to_excel(display_df)
+            st.download_button(
+                label="📥 Excel",
+                data=excel_data,
+                file_name=f"arrivals_{kms_year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
     else:
         st.info("ℹ️ No arrival records for this KMS year.")
 
