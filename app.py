@@ -140,11 +140,40 @@ def init_database():
             VALUES (?, ?, 'admin', 'Administrator')
         """, ("admin", admin_hash))
     
+    # Create default employee accounts if not exists
+    cursor.execute("SELECT COUNT(*) FROM Users WHERE role = 'employee'")
+    if cursor.fetchone()[0] == 0:
+        emp_hash = hashlib.sha256("emp123".encode()).hexdigest()
+        cursor.execute("""
+            INSERT INTO Users (username, password_hash, role, full_name)
+            VALUES (?, ?, 'employee', 'Employee 1')
+        """, ("emp1", emp_hash))
+        cursor.execute("""
+            INSERT INTO Users (username, password_hash, role, full_name)
+            VALUES (?, ?, 'employee', 'Employee 2')
+        """, ("emp2", emp_hash))
+    
     # Create default godowns if not exists
     cursor.execute("SELECT COUNT(*) FROM Settings_Godown")
     if cursor.fetchone()[0] == 0:
         for godown in ['Hoper', 'G-3', 'S-2']:
             cursor.execute("INSERT OR IGNORE INTO Settings_Godown (godown_name) VALUES (?)", (godown,))
+    
+    # Create default mandis if not exists
+    cursor.execute("SELECT COUNT(*) FROM Settings_Mandi")
+    if cursor.fetchone()[0] == 0:
+        mandis = ['BHEJENGIWADA', 'CHALANGUDA', 'GUMKA', 'KALIMELA', 'M.V-11', 'M.V-26',
+                  'MARIWADA', 'MARKAPALLY', 'MATAPAKA', 'PUSUGUDA', 'UDDUPA']
+        for mandi in mandis:
+            cursor.execute("INSERT OR IGNORE INTO Settings_Mandi (mandi_name, distance_km) VALUES (?, 0)", (mandi,))
+    
+    # Create default vehicles if not exists
+    cursor.execute("SELECT COUNT(*) FROM Vehicle_Registry")
+    if cursor.fetchone()[0] == 0:
+        vehicles = ['AP31TU1719', 'CG08Z6713', 'CG17KL6229', 'OD30A9549', 'OD30B3879',
+                    'OD30B5356', 'OD30H0487', 'OR10C5722', 'OR301611']
+        for vehicle in vehicles:
+            cursor.execute("INSERT OR IGNORE INTO Vehicle_Registry (vehicle_number) VALUES (?)", (vehicle,))
     
     conn.commit()
     conn.close()
@@ -427,7 +456,10 @@ def show_employee_dashboard():
             mandis_df = get_mandis()
             if not mandis_df.empty:
                 mandi_options = mandis_df['mandi_name'].tolist()
-                selected_mandi = st.selectbox("Mandi", mandi_options)
+                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options)
+                selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
+                if selected_mandi:
+                    st.info(f"📍 Selected: **{selected_mandi}**")
             else:
                 st.warning("⚠️ No mandis configured. Contact admin.")
                 selected_mandi = None
@@ -648,7 +680,11 @@ def show_admin_dashboard():
             
             mandis_df = get_mandis()
             if not mandis_df.empty:
-                selected_mandi = st.selectbox("Mandi", mandis_df['mandi_name'].tolist(), key="admin_mandi")
+                mandi_options = mandis_df['mandi_name'].tolist()
+                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options, key="admin_mandi")
+                selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
+                if selected_mandi:
+                    st.info(f"📍 Selected: **{selected_mandi}**")
             else:
                 selected_mandi = None
             
