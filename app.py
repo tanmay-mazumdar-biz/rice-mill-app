@@ -8,7 +8,6 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, date
 from io import BytesIO
-import os
 
 # Page configuration
 st.set_page_config(
@@ -539,35 +538,39 @@ with tab3:
     vehicles_df = get_vehicles()
     
     if not vehicles_df.empty:
+        # Create display dataframe without id column
+        display_vehicles = vehicles_df[['vehicle_number', 'owner_name', 'puc_expiry_date', 'permit_number']].copy()
+        
         # Display as editable table
         edited_vehicles = st.data_editor(
-            vehicles_df,
+            display_vehicles,
             use_container_width=True,
             hide_index=True,
-            disabled=['id', 'vehicle_number'],
+            disabled=['vehicle_number'],
             column_config={
-                "id": None,  # Hide ID column
-                "vehicle_number": st.column_config.TextColumn("Vehicle Number", disabled=True),
+                "vehicle_number": st.column_config.TextColumn("Vehicle Number"),
                 "owner_name": st.column_config.TextColumn("Owner Name"),
                 "puc_expiry_date": st.column_config.DateColumn("PUC Expiry", format="DD/MM/YYYY"),
                 "permit_number": st.column_config.TextColumn("Permit Number"),
-            }
+            },
+            key="vehicle_editor"
         )
         
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("💾 Save Changes", type="primary", use_container_width=True):
+            if st.button("💾 Save Changes", type="primary", use_container_width=True, key="save_vehicles"):
                 conn = get_connection()
                 cursor = conn.cursor()
                 
                 try:
                     for idx, row in edited_vehicles.iterrows():
+                        vehicle_id = vehicles_df.iloc[idx]['id']
                         cursor.execute("""
                             UPDATE Vehicle_Registry 
                             SET owner_name = ?, puc_expiry_date = ?, permit_number = ?
                             WHERE id = ?
-                        """, (row['owner_name'], row['puc_expiry_date'], row['permit_number'], row['id']))
+                        """, (row['owner_name'], row['puc_expiry_date'], row['permit_number'], vehicle_id))
                     
                     conn.commit()
                     st.success("✅ Changes saved successfully!")
@@ -654,16 +657,19 @@ with tab4:
         mandis_df = get_mandis()
         
         if not mandis_df.empty:
+            # Create display dataframe without id column
+            display_mandis = mandis_df[['mandi_name', 'distance_km']].copy()
+            
             edited_mandis = st.data_editor(
-                mandis_df,
+                display_mandis,
                 use_container_width=True,
                 hide_index=True,
-                disabled=['id', 'mandi_name'],
+                disabled=['mandi_name'],
                 column_config={
-                    "id": None,
-                    "mandi_name": st.column_config.TextColumn("Mandi Name", disabled=True),
+                    "mandi_name": st.column_config.TextColumn("Mandi Name"),
                     "distance_km": st.column_config.NumberColumn("Distance (km)", format="%.1f"),
-                }
+                },
+                key="mandi_editor"
             )
             
             col1, col2 = st.columns(2)
@@ -675,11 +681,12 @@ with tab4:
                     
                     try:
                         for idx, row in edited_mandis.iterrows():
+                            mandi_id = mandis_df.iloc[idx]['id']
                             cursor.execute("""
                                 UPDATE Settings_Mandi 
                                 SET distance_km = ?
                                 WHERE id = ?
-                            """, (row['distance_km'], row['id']))
+                            """, (row['distance_km'], mandi_id))
                         
                         conn.commit()
                         st.success("✅ Changes saved successfully!")
@@ -758,16 +765,19 @@ with tab4:
         drivers_df = get_drivers()
         
         if not drivers_df.empty:
+            # Create display dataframe without id column
+            display_drivers = drivers_df[['driver_name', 'phone_number']].copy()
+            
             edited_drivers = st.data_editor(
-                drivers_df,
+                display_drivers,
                 use_container_width=True,
                 hide_index=True,
-                disabled=['id', 'driver_name'],
+                disabled=['driver_name'],
                 column_config={
-                    "id": None,
-                    "driver_name": st.column_config.TextColumn("Driver Name", disabled=True),
+                    "driver_name": st.column_config.TextColumn("Driver Name"),
                     "phone_number": st.column_config.TextColumn("Phone Number"),
-                }
+                },
+                key="driver_editor"
             )
             
             col1, col2 = st.columns(2)
@@ -779,11 +789,12 @@ with tab4:
                     
                     try:
                         for idx, row in edited_drivers.iterrows():
+                            driver_id = drivers_df.iloc[idx]['id']
                             cursor.execute("""
                                 UPDATE Settings_Driver 
                                 SET phone_number = ?
                                 WHERE id = ?
-                            """, (row['phone_number'], row['id']))
+                            """, (row['phone_number'], driver_id))
                         
                         conn.commit()
                         st.success("✅ Changes saved successfully!")
