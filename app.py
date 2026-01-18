@@ -264,13 +264,14 @@ with tab1:
             mandi_options = mandis_df['mandi_name'].tolist()
             selected_mandi = st.selectbox("Select Mandi", mandi_options, key="mandi_select")
             
-            # Auto-fill distance
+            # Auto-fill distance (read-only)
             mandi_distance = mandis_df[mandis_df['mandi_name'] == selected_mandi]['distance_km'].values[0]
-            distance = st.number_input("Distance (km)", value=float(mandi_distance), min_value=0.0, step=0.1, key="distance")
+            distance = mandi_distance
+            st.text_input("Distance (km)", value=f"{distance:.1f}", disabled=True, key="distance_display")
         else:
             st.warning("⚠️ No mandis configured. Please add mandis in Settings tab.")
             selected_mandi = None
-            distance = st.number_input("Distance (km)", value=0.0, min_value=0.0, step=0.1, key="distance")
+            distance = 0.0
     
     with col2:
         # Vehicle selection
@@ -380,12 +381,13 @@ with tab1:
                             current_mandi_idx = mandi_options.index(row['mandi_name']) if row['mandi_name'] in mandi_options else 0
                             edit_mandi = st.selectbox("Mandi", mandi_options, index=current_mandi_idx, key=f"edit_mandi_{row['id']}")
                             
-                            # Auto-fill distance
-                            mandi_distance = mandis_df[mandis_df['mandi_name'] == edit_mandi]['distance_km'].values[0]
-                            edit_distance = st.number_input("Distance (km)", value=float(row['distance']), min_value=0.0, step=0.1, key=f"edit_dist_{row['id']}")
+                            # Auto-fill distance (read-only display)
+                            edit_distance = mandis_df[mandis_df['mandi_name'] == edit_mandi]['distance_km'].values[0]
+                            st.text_input("Distance (km)", value=f"{edit_distance:.1f}", disabled=True, key=f"edit_dist_{row['id']}")
                         else:
                             edit_mandi = row['mandi_name']
-                            edit_distance = st.number_input("Distance (km)", value=float(row['distance']), min_value=0.0, step=0.1, key=f"edit_dist_{row['id']}")
+                            edit_distance = row['distance']
+                            st.text_input("Distance (km)", value=f"{edit_distance:.1f}", disabled=True, key=f"edit_dist_{row['id']}")
                     
                     with edit_col2:
                         # Vehicle selection
