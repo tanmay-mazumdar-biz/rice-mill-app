@@ -29,6 +29,7 @@ SHEET_EMPLOYEE_ARRIVALS = "Employee_Arrivals"
 SHEET_ADMIN_ARRIVALS = "Admin_Arrivals"
 SHEET_MASTER_STOCK = "Master_Stock"
 SHEET_MILLING = "Milling"
+SHEET_DIESEL = "Diesel"
 SHEET_MANDIS = "Mandis"
 SHEET_GODOWNS = "Godowns"
 SHEET_VEHICLES = "Vehicles"
@@ -67,7 +68,6 @@ def get_gsheet_connection():
             ]
         )
         client = gspread.authorize(credentials)
-        st.sidebar.success("✅ Connected to Google Sheets")
         return client
     except KeyError:
         st.error("❌ Missing secrets! Add gcp_service_account to Streamlit secrets.")
@@ -120,6 +120,7 @@ def init_sheets():
         SHEET_ADMIN_ARRIVALS: ["id", "date", "kms_year", "mandi_name", "vehicle_number", "ac_note",
                                "quantity_quintals", "entered_by", "entry_timestamp", "remarks"],
         SHEET_MILLING: ["id", "date", "kms_year", "issued_quintals", "remarks", "entered_by", "entry_timestamp"],
+        SHEET_DIESEL: ["id", "date", "kms_year", "vehicle_number", "liters", "amount", "pump_station", "entered_by", "entry_timestamp"],
         SHEET_MANDIS: ["id", "mandi_name", "distance_km"],
         SHEET_GODOWNS: ["id", "godown_name"],
         SHEET_VEHICLES: ["id", "vehicle_number", "owner_name", "puc_expiry_date", "permit_number", "is_active"]
@@ -127,17 +128,12 @@ def init_sheets():
     
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
-        st.error("❌ Could not connect to spreadsheet. Check your secrets and permissions.")
         return
-    
-    st.info(f"📊 Connected to spreadsheet: {spreadsheet.title}")
     
     # Get existing sheet names
     try:
         existing_sheets = [ws.title for ws in spreadsheet.worksheets()]
-        st.info(f"📑 Existing sheets: {existing_sheets}")
     except Exception as e:
-        st.error(f"❌ Error getting worksheets: {e}")
         return
     
     for sheet_name, headers in sheets_config.items():
@@ -145,10 +141,9 @@ def init_sheets():
             try:
                 worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
                 worksheet.append_row(headers)
-                st.success(f"✅ Created sheet: {sheet_name}")
                 time.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error creating {sheet_name}: {e}")
+                pass  # Silently handle errors
     
     # Add default data only if sheets are empty
     time.sleep(1)
@@ -195,8 +190,6 @@ def init_sheets():
                 "puc_expiry_date": "", "permit_number": "", "is_active": "1"
             })
             time.sleep(0.5)
-    
-    st.success("✅ Database initialized!")
 
 def get_all_data(sheet_name):
     """Get all data from a sheet as DataFrame - with caching"""
@@ -676,16 +669,87 @@ def show_admin_dashboard():
     """Display admin dashboard"""
     st.title("🌾 Rice Mill - Admin Portal")
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📝 Admin Entry", "📊 Master Stock", "🏭 Milling", "🔄 Comparison",
-        "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+        "🏠 Dashboard", "📝 Admin Entry", "📊 Master Stock", "🏭 Milling", "⛽ Diesel",
+        "🔄 Comparison", "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
     ])
     
     kms_year = st.session_state['kms_year']
     username = st.session_state['username']
     
-    # TAB 1: Admin Entry
+    # TAB 1: Dashboard
     with tab1:
+        st.subheader("📊 Quick Overview")
+        
+        # Get today's data
+        today = date.today()
+        today_str = str(today)
+        
+        # Get all data for dashboard
+        admin_df = get_admin_arrivals(kms_year)
+        emp_df = get_employee_arrivals(kms_year)
+        milling_df = get_all_data(SHEET_MILLING)
+        diesel_df = get_all_data(SHEET_DIESEL)
+        
+        # Calculate totals
+        total_received = admin_df['quantity_quintals'].astype(float).sum() if not admin_df.empty else 0
+        
+        total_milling = 0
+        if not milling_df.empty:
+            milling_kms = milling_df[milling_df['kms_year'] == kms_year]
+            if not milling_kms.empty:
+                total_milling = milling_kms['issued_quintals'].astype(float).sum()
+        
+        current_stock = total_received - total_milling
+        
+        # Today's entries
+        today_admin = admin_df[admin_df['date'] == today_str] if not admin_df.empty else pd.DataFrame()
+        today_emp = emp_df[emp_df['date'] == today_str] if not emp_df.empty else pd.DataFrame()
+        
+        # Summary cards
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📦 Total Received", f"{total_received:,.2f} Q")
+        col2.metric("🏭 Total Milled", f"{total_milling:,.2f} Q")
+        col3.metric("📊 Current Stock", f"{current_stock:,.2f} Q")
+        col4.metric("📅 Today's Entries", f"{len(today_admin) + len(today_emp)}")
+        
+        st.markdown("---")
+        
+        # Vehicle Trip Count (This Month)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("##### 🚛 Vehicle Trips (This Month)")
+            current_month = today.strftime("%Y-%m")
+            if not admin_df.empty:
+                admin_df['month'] = admin_df['date'].str[:7]
+                month_trips = admin_df[admin_df['month'] == current_month]
+                if not month_trips.empty:
+                    trip_count = month_trips.groupby('vehicle_number').size().reset_index(name='Trips')
+                    trip_count = trip_count.sort_values('Trips', ascending=False)
+                    st.dataframe(trip_count, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No trips this month")
+            else:
+                st.info("No data available")
+        
+        with col2:
+            st.markdown("##### 📈 Recent Activity")
+            # Show last 10 entries
+            if not admin_df.empty:
+                recent = admin_df.head(10)[['date', 'mandi_name', 'vehicle_number', 'quantity_quintals']]
+                recent.columns = ['Date', 'Mandi', 'Vehicle', 'Qty (Q)']
+                st.dataframe(recent, use_container_width=True, hide_index=True)
+            else:
+                st.info("No recent activity")
+        
+        # Backup Reminder
+        st.markdown("---")
+        st.markdown("##### 💾 Backup Reminder")
+        st.info("💡 **Tip:** Download Excel backups regularly from each tab to keep your data safe!")
+    
+    # TAB 2: Admin Entry
+    with tab2:
         st.subheader("Official Arrival Register")
         
         entry_col, list_col = st.columns([1, 2])
@@ -747,7 +811,14 @@ def show_admin_dashboard():
         with list_col:
             st.markdown("##### 📋 Arrival Register")
             
-            admin_df = get_admin_arrivals(kms_year)
+            # Add filter options
+            filter_col1, filter_col2 = st.columns(2)
+            with filter_col1:
+                admin_filter_start = st.date_input("From Date", value=date.today() - timedelta(days=7), key="admin_filter_start")
+            with filter_col2:
+                admin_filter_end = st.date_input("To Date", value=date.today(), key="admin_filter_end")
+            
+            admin_df = get_admin_arrivals(kms_year, start_date=admin_filter_start, end_date=admin_filter_end)
             
             if not admin_df.empty:
                 # Edit mode check
@@ -816,8 +887,8 @@ def show_admin_dashboard():
             else:
                 st.info("ℹ️ No entries yet.")
     
-    # TAB 2: Master Stock (Read-only, calculated from Admin Arrivals + Milling)
-    with tab2:
+    # TAB 3: Master Stock (Read-only, calculated from Admin Arrivals + Milling)
+    with tab3:
         st.subheader("Master Stock Register (Read-Only)")
         st.caption("📊 Auto-calculated from Admin Arrivals and Milling entries")
         
@@ -889,8 +960,8 @@ def show_admin_dashboard():
         else:
             st.info("ℹ️ No admin arrivals data. Add arrivals first.")
     
-    # TAB 3: Milling (Issue for Milling entry)
-    with tab3:
+    # TAB 4: Milling (Issue for Milling entry)
+    with tab4:
         st.subheader("Issue for Milling")
         
         entry_col, list_col = st.columns([1, 2])
@@ -950,8 +1021,130 @@ def show_admin_dashboard():
             else:
                 st.info("ℹ️ No milling entries yet.")
     
-    # TAB 4: Comparison (Side-by-side summaries)
-    with tab4:
+    # TAB 5: Diesel
+    with tab5:
+        st.subheader("⛽ Diesel Entry")
+        
+        entry_col, summary_col = st.columns([1, 2])
+        
+        with entry_col:
+            st.markdown("##### ➕ Add Diesel Entry")
+            
+            diesel_date = st.date_input("Date", value=date.today(), key="diesel_date")
+            diesel_kms_year = get_kms_year_from_date(diesel_date)
+            st.caption(f"📅 KMS Year: **{diesel_kms_year}**")
+            
+            vehicles_df = get_all_data(SHEET_VEHICLES)
+            vehicles_df = vehicles_df[vehicles_df['is_active'].astype(str) == '1'] if not vehicles_df.empty else vehicles_df
+            
+            if not vehicles_df.empty:
+                diesel_vehicle = st.selectbox("Vehicle", vehicles_df['vehicle_number'].tolist(), key="diesel_vehicle")
+            else:
+                diesel_vehicle = None
+            
+            diesel_liters = st.number_input("Liters", min_value=0.0, value=0.0, step=0.1, key="diesel_liters")
+            diesel_amount = st.number_input("Amount (₹)", min_value=0.0, value=0.0, step=1.0, key="diesel_amount")
+            diesel_pump = st.text_input("Pump/Station Name", key="diesel_pump")
+            
+            if st.button("💾 Add Diesel Entry", type="primary", use_container_width=True):
+                if not diesel_vehicle:
+                    st.error("❌ Please select a vehicle")
+                elif diesel_liters <= 0:
+                    st.error("❌ Liters must be greater than 0")
+                elif diesel_amount <= 0:
+                    st.error("❌ Amount must be greater than 0")
+                else:
+                    success = add_row(SHEET_DIESEL, {
+                        "id": get_next_id(SHEET_DIESEL),
+                        "date": str(diesel_date),
+                        "kms_year": diesel_kms_year,
+                        "vehicle_number": diesel_vehicle,
+                        "liters": diesel_liters,
+                        "amount": diesel_amount,
+                        "pump_station": diesel_pump,
+                        "entered_by": username,
+                        "entry_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+                    if success:
+                        st.success("✅ Diesel entry added!")
+                        st.rerun()
+        
+        with summary_col:
+            st.markdown("##### 📊 Diesel Summary")
+            
+            diesel_df = get_all_data(SHEET_DIESEL)
+            
+            if not diesel_df.empty:
+                diesel_kms = diesel_df[diesel_df['kms_year'] == kms_year]
+                
+                if not diesel_kms.empty:
+                    diesel_kms['liters'] = pd.to_numeric(diesel_kms['liters'], errors='coerce')
+                    diesel_kms['amount'] = pd.to_numeric(diesel_kms['amount'], errors='coerce')
+                    
+                    # Overall totals
+                    total_liters = diesel_kms['liters'].sum()
+                    total_amount = diesel_kms['amount'].sum()
+                    
+                    col1, col2 = st.columns(2)
+                    col1.metric("Total Liters", f"{total_liters:,.2f} L")
+                    col2.metric("Total Amount", f"₹{total_amount:,.2f}")
+                    
+                    st.markdown("---")
+                    
+                    # By Vehicle
+                    st.markdown("##### By Vehicle")
+                    by_vehicle = diesel_kms.groupby('vehicle_number').agg({
+                        'liters': 'sum',
+                        'amount': 'sum'
+                    }).sort_values('amount', ascending=False)
+                    by_vehicle.columns = ['Liters', 'Amount (₹)']
+                    st.dataframe(by_vehicle, use_container_width=True)
+                    
+                    # By Month
+                    st.markdown("##### By Month")
+                    diesel_kms['month'] = diesel_kms['date'].str[:7]
+                    by_month = diesel_kms.groupby('month').agg({
+                        'liters': 'sum',
+                        'amount': 'sum'
+                    }).sort_index(ascending=False)
+                    by_month.columns = ['Liters', 'Amount (₹)']
+                    st.dataframe(by_month, use_container_width=True)
+                    
+                    st.markdown("---")
+                    
+                    # Recent entries with edit/delete
+                    st.markdown("##### Recent Entries")
+                    for _, row in diesel_kms.sort_values('date', ascending=False).head(20).iterrows():
+                        cols = st.columns([1.5, 2, 1, 1.5, 2, 0.5, 0.5])
+                        cols[0].write(f"📅 {row['date']}")
+                        cols[1].write(f"🚛 {row['vehicle_number']}")
+                        cols[2].write(f"⛽ {row['liters']} L")
+                        cols[3].write(f"₹{row['amount']}")
+                        cols[4].write(f"🏪 {row['pump_station'] or '-'}")
+                        
+                        if cols[5].button("✏️", key=f"edit_diesel_{row['id']}"):
+                            st.session_state['edit_diesel_id'] = row['id']
+                            st.rerun()
+                        
+                        if cols[6].button("🗑️", key=f"del_diesel_{row['id']}"):
+                            delete_row(SHEET_DIESEL, row['id'])
+                            st.rerun()
+                    
+                    # Download
+                    st.download_button(
+                        "📥 Download Diesel Data",
+                        to_excel(diesel_kms[['date', 'vehicle_number', 'liters', 'amount', 'pump_station']]),
+                        f"diesel_{kms_year}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.info("ℹ️ No diesel entries for this KMS year.")
+            else:
+                st.info("ℹ️ No diesel entries yet.")
+    
+    # TAB 6: Comparison (Side-by-side summaries)
+    with tab6:
         st.subheader("Employee vs Admin Data")
         st.caption("📊 Side-by-side comparison of totals (dates may differ due to timing)")
         
@@ -1026,21 +1219,41 @@ def show_admin_dashboard():
             else:
                 st.info("No admin data for this period")
     
-    # TAB 5: Employee Data
-    with tab5:
+    # TAB 7: Employee Data
+    with tab7:
         st.subheader("Employee Entries")
+        
+        # Add search/filter
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            search_vehicle = st.text_input("🔍 Search Vehicle", key="search_emp_vehicle")
+        with col2:
+            search_mandi = st.text_input("🔍 Search Mandi", key="search_emp_mandi")
+        with col3:
+            filter_date = st.date_input("📅 Filter Date", value=None, key="filter_emp_date")
         
         emp_entries = get_employee_arrivals(kms_year)
         
         if not emp_entries.empty:
-            st.dataframe(emp_entries[['date', 'mandi_name', 'vehicle_number', 'bags',
+            # Apply filters
+            filtered_emp = emp_entries.copy()
+            if search_vehicle:
+                filtered_emp = filtered_emp[filtered_emp['vehicle_number'].str.contains(search_vehicle.upper(), na=False)]
+            if search_mandi:
+                filtered_emp = filtered_emp[filtered_emp['mandi_name'].str.contains(search_mandi.upper(), na=False)]
+            if filter_date:
+                filtered_emp = filtered_emp[filtered_emp['date'] == str(filter_date)]
+            
+            st.dataframe(filtered_emp[['date', 'mandi_name', 'vehicle_number', 'bags',
                                       'weight_quintals', 'godown', 'difference', 'entered_by']],
                         use_container_width=True, hide_index=True)
+            
+            st.caption(f"Showing {len(filtered_emp)} of {len(emp_entries)} entries")
         else:
             st.info("ℹ️ No employee entries.")
     
-    # TAB 6: Vehicles
-    with tab6:
+    # TAB 8: Vehicles
+    with tab8:
         st.subheader("Vehicle Registry")
         
         vcol1, vcol2 = st.columns([1, 2])
@@ -1070,8 +1283,8 @@ def show_admin_dashboard():
                 st.dataframe(vehicles_df[['vehicle_number', 'owner_name', 'is_active']], 
                             use_container_width=True, hide_index=True)
     
-    # TAB 7: Settings
-    with tab7:
+    # TAB 9: Settings
+    with tab9:
         settings_tab1, settings_tab2, settings_tab3 = st.tabs(["🏪 Mandis", "🏭 Godowns", "👥 Users"])
         
         with settings_tab1:
@@ -1196,10 +1409,6 @@ def show_admin_dashboard():
 # ============== MAIN ==============
 
 def main():
-    # Always show debug info
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Debug Info")
-    
     # Initialize sheets on first run
     if 'initialized' not in st.session_state:
         with st.spinner("Connecting to database..."):
