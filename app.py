@@ -568,10 +568,71 @@ def show_employee_dashboard():
             col4.metric("Avg Diff", f"{entries_df['difference'].astype(float).mean():+.2f} Q")
             
             st.markdown("---")
-            st.dataframe(entries_df[['date', 'mandi_name', 'vehicle_number', 'bags', 
-                                     'weight_quintals', 'godown', 'difference']], 
-                        use_container_width=True, hide_index=True)
             
+            # Edit mode check
+            if 'edit_emp_id' not in st.session_state:
+                st.session_state['edit_emp_id'] = None
+            
+            for _, row in entries_df.iterrows():
+                row_id = row['id']
+                
+                # Check if this row is being edited
+                if st.session_state['edit_emp_id'] == row_id:
+                    # Edit form
+                    with st.form(key=f"edit_emp_form_{row_id}"):
+                        st.markdown(f"**Editing entry from {row['date']}**")
+                        edit_cols = st.columns([2, 2, 1, 1, 1])
+                        edit_mandi = edit_cols[0].text_input("Mandi", value=row['mandi_name'], key=f"edit_emp_mandi_{row_id}")
+                        edit_vehicle = edit_cols[1].text_input("Vehicle", value=row['vehicle_number'], key=f"edit_emp_vehicle_{row_id}")
+                        edit_bags = edit_cols[2].number_input("Bags", value=int(row['bags']), key=f"edit_emp_bags_{row_id}")
+                        edit_weight = edit_cols[3].number_input("Weight", value=float(row['weight_quintals']), key=f"edit_emp_weight_{row_id}")
+                        edit_godown = edit_cols[4].text_input("Godown", value=row['godown'] or '', key=f"edit_emp_godown_{row_id}")
+                        
+                        # Recalculate expected and difference
+                        new_expected = round(edit_bags * WEIGHT_PER_BAG, 2)
+                        new_diff = round(edit_weight - new_expected, 2)
+                        
+                        btn_cols = st.columns([1, 1, 2])
+                        if btn_cols[0].form_submit_button("💾 Save"):
+                            update_row(SHEET_EMPLOYEE_ARRIVALS, row_id, {
+                                "mandi_name": edit_mandi,
+                                "vehicle_number": edit_vehicle,
+                                "bags": edit_bags,
+                                "weight_quintals": edit_weight,
+                                "godown": edit_godown,
+                                "expected_weight": new_expected,
+                                "difference": new_diff
+                            })
+                            st.session_state['edit_emp_id'] = None
+                            st.rerun()
+                        if btn_cols[1].form_submit_button("❌ Cancel"):
+                            st.session_state['edit_emp_id'] = None
+                            st.rerun()
+                else:
+                    # Normal display
+                    cols = st.columns([1.5, 2, 2, 1, 1, 1, 1, 0.5, 0.5])
+                    cols[0].write(f"📅 {row['date']}")
+                    cols[1].write(f"🏪 {row['mandi_name']}")
+                    cols[2].write(f"🚛 {row['vehicle_number']}")
+                    cols[3].write(f"📦 {row['bags']}")
+                    cols[4].write(f"⚖️ {row['weight_quintals']} Q")
+                    cols[5].write(f"🏭 {row['godown'] or '-'}")
+                    
+                    diff = float(row['difference'])
+                    if abs(diff) > DIFFERENCE_THRESHOLD:
+                        cols[6].write(f"⚠️ {diff:+.2f}")
+                    else:
+                        cols[6].write(f"✅ {diff:+.2f}")
+                    
+                    if cols[7].button("✏️", key=f"edit_emp_{row_id}"):
+                        st.session_state['edit_emp_id'] = row_id
+                        st.rerun()
+                    
+                    if cols[8].button("🗑️", key=f"del_emp_{row_id}"):
+                        delete_row(SHEET_EMPLOYEE_ARRIVALS, row_id)
+                        st.rerun()
+            
+            st.markdown("---")
             st.download_button(
                 "📥 Download My Entries",
                 to_excel(entries_df),
@@ -680,7 +741,6 @@ def show_admin_dashboard():
                     })
                     
                     if success:
-                        update_master_stock(entry_kms_year)
                         st.success("✅ Entry added!")
                         st.rerun()
         
@@ -690,6 +750,10 @@ def show_admin_dashboard():
             admin_df = get_admin_arrivals(kms_year)
             
             if not admin_df.empty:
+                # Edit mode check
+                if 'edit_admin_id' not in st.session_state:
+                    st.session_state['edit_admin_id'] = None
+                
                 for date_val in admin_df['date'].unique():
                     day_data = admin_df[admin_df['date'] == date_val]
                     daily_total = day_data['quantity_quintals'].astype(float).sum()
@@ -697,16 +761,46 @@ def show_admin_dashboard():
                     st.markdown(f"**📅 {date_val}** — Total: **{daily_total:.2f} Q**")
                     
                     for _, row in day_data.iterrows():
-                        cols = st.columns([2, 2, 1, 1, 1])
-                        cols[0].write(f"🏪 {row['mandi_name']}")
-                        cols[1].write(f"🚛 {row['vehicle_number']}")
-                        cols[2].write(f"📝 {row['ac_note'] or '-'}")
-                        cols[3].write(f"⚖️ {row['quantity_quintals']} Q")
+                        row_id = row['id']
                         
-                        if cols[4].button("🗑️", key=f"del_{row['id']}"):
-                            delete_row(SHEET_ADMIN_ARRIVALS, row['id'])
-                            update_master_stock(kms_year)
-                            st.rerun()
+                        # Check if this row is being edited
+                        if st.session_state['edit_admin_id'] == row_id:
+                            # Edit form
+                            with st.form(key=f"edit_admin_form_{row_id}"):
+                                edit_cols = st.columns([2, 2, 1, 1])
+                                edit_mandi = edit_cols[0].text_input("Mandi", value=row['mandi_name'], key=f"edit_mandi_{row_id}")
+                                edit_vehicle = edit_cols[1].text_input("Vehicle", value=row['vehicle_number'], key=f"edit_vehicle_{row_id}")
+                                edit_ac = edit_cols[2].text_input("A/C", value=row['ac_note'] or '', key=f"edit_ac_{row_id}")
+                                edit_qty = edit_cols[3].number_input("Qty", value=float(row['quantity_quintals']), key=f"edit_qty_{row_id}")
+                                
+                                btn_cols = st.columns([1, 1, 2])
+                                if btn_cols[0].form_submit_button("💾 Save"):
+                                    update_row(SHEET_ADMIN_ARRIVALS, row_id, {
+                                        "mandi_name": edit_mandi,
+                                        "vehicle_number": edit_vehicle,
+                                        "ac_note": edit_ac,
+                                        "quantity_quintals": edit_qty
+                                    })
+                                    st.session_state['edit_admin_id'] = None
+                                    st.rerun()
+                                if btn_cols[1].form_submit_button("❌ Cancel"):
+                                    st.session_state['edit_admin_id'] = None
+                                    st.rerun()
+                        else:
+                            # Normal display
+                            cols = st.columns([2, 2, 1, 1, 0.5, 0.5])
+                            cols[0].write(f"🏪 {row['mandi_name']}")
+                            cols[1].write(f"🚛 {row['vehicle_number']}")
+                            cols[2].write(f"📝 {row['ac_note'] or '-'}")
+                            cols[3].write(f"⚖️ {row['quantity_quintals']} Q")
+                            
+                            if cols[4].button("✏️", key=f"edit_{row_id}"):
+                                st.session_state['edit_admin_id'] = row_id
+                                st.rerun()
+                            
+                            if cols[5].button("🗑️", key=f"del_{row_id}"):
+                                delete_row(SHEET_ADMIN_ARRIVALS, row_id)
+                                st.rerun()
                     
                     st.divider()
                 
@@ -959,6 +1053,7 @@ def show_admin_dashboard():
         with settings_tab1:
             col1, col2 = st.columns(2)
             with col1:
+                st.markdown("##### ➕ Add Mandi")
                 new_mandi = st.text_input("New Mandi Name")
                 if st.button("➕ Add Mandi", type="primary"):
                     if new_mandi:
@@ -969,14 +1064,27 @@ def show_admin_dashboard():
                         })
                         st.success("✅ Added!")
                         st.rerun()
-            with col2:
+                
+                st.markdown("---")
+                st.markdown("##### 🗑️ Delete Mandi")
                 mandis_df = get_all_data(SHEET_MANDIS)
+                if not mandis_df.empty:
+                    del_mandi = st.selectbox("Select Mandi to Delete", mandis_df['mandi_name'].tolist(), key="del_mandi")
+                    if st.button("🗑️ Delete Mandi", type="secondary"):
+                        mandi_id = mandis_df[mandis_df['mandi_name'] == del_mandi]['id'].values[0]
+                        delete_row(SHEET_MANDIS, mandi_id)
+                        st.success("✅ Deleted!")
+                        st.rerun()
+            
+            with col2:
+                st.markdown("##### 📋 Current Mandis")
                 if not mandis_df.empty:
                     st.dataframe(mandis_df[['mandi_name']], use_container_width=True, hide_index=True)
         
         with settings_tab2:
             col1, col2 = st.columns(2)
             with col1:
+                st.markdown("##### ➕ Add Godown")
                 new_godown = st.text_input("New Godown Name")
                 if st.button("➕ Add Godown", type="primary"):
                     if new_godown:
@@ -986,15 +1094,27 @@ def show_admin_dashboard():
                         })
                         st.success("✅ Added!")
                         st.rerun()
-            with col2:
+                
+                st.markdown("---")
+                st.markdown("##### 🗑️ Delete Godown")
                 godowns_df = get_all_data(SHEET_GODOWNS)
+                if not godowns_df.empty:
+                    del_godown = st.selectbox("Select Godown to Delete", godowns_df['godown_name'].tolist(), key="del_godown")
+                    if st.button("🗑️ Delete Godown", type="secondary"):
+                        godown_id = godowns_df[godowns_df['godown_name'] == del_godown]['id'].values[0]
+                        delete_row(SHEET_GODOWNS, godown_id)
+                        st.success("✅ Deleted!")
+                        st.rerun()
+            
+            with col2:
+                st.markdown("##### 📋 Current Godowns")
                 if not godowns_df.empty:
                     st.dataframe(godowns_df[['godown_name']], use_container_width=True, hide_index=True)
         
         with settings_tab3:
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**Add New User**")
+                st.markdown("##### ➕ Add New User")
                 new_username = st.text_input("Username")
                 new_password = st.text_input("Password", type="password")
                 new_fullname = st.text_input("Full Name")
@@ -1014,8 +1134,37 @@ def show_admin_dashboard():
                         })
                         st.success("✅ User created!")
                         st.rerun()
-            with col2:
+                
+                st.markdown("---")
+                st.markdown("##### 🗑️ Delete User")
                 users_df = get_all_data(SHEET_USERS)
+                if not users_df.empty:
+                    del_users = users_df[users_df['username'] != username]['username'].tolist()
+                    if del_users:
+                        del_user = st.selectbox("Select User to Delete", del_users, key="del_user")
+                        if st.button("🗑️ Delete User", type="secondary"):
+                            user_id = users_df[users_df['username'] == del_user]['id'].values[0]
+                            delete_row(SHEET_USERS, user_id)
+                            st.success("✅ Deleted!")
+                            st.rerun()
+                    else:
+                        st.info("No other users to delete")
+                
+                st.markdown("---")
+                st.markdown("##### 🔑 Reset Password")
+                if not users_df.empty:
+                    reset_user = st.selectbox("Select User", users_df['username'].tolist(), key="reset_user")
+                    new_pass = st.text_input("New Password", type="password", key="new_pass")
+                    if st.button("🔑 Reset Password"):
+                        if new_pass:
+                            user_id = users_df[users_df['username'] == reset_user]['id'].values[0]
+                            update_row(SHEET_USERS, user_id, {"password_hash": hash_password(new_pass)})
+                            st.success("✅ Password reset!")
+                        else:
+                            st.error("Enter new password")
+            
+            with col2:
+                st.markdown("##### 📋 Current Users")
                 if not users_df.empty:
                     st.dataframe(users_df[['username', 'role', 'full_name', 'is_active']], 
                                 use_container_width=True, hide_index=True)
