@@ -10,7 +10,27 @@ import pandas as pd
 import hashlib
 from datetime import datetime, date, timedelta
 from io import BytesIO
+import gspread
+from google.oauth2.service_account import Credentials
 
+# Google Sheets setup
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+@st.cache_resource
+def get_google_sheets_client():
+    """Initialize Google Sheets client"""
+    try:
+        credentials = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=SCOPES
+        )
+        return gspread.authorize(credentials)
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {e}")
+        return None
 # Page configuration
 st.set_page_config(
     page_title="Rice Mill Procurement System",
@@ -1244,3 +1264,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
