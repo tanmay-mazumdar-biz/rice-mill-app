@@ -93,7 +93,9 @@ def get_or_create_worksheet(sheet_name, headers):
     return worksheet
 
 def init_sheets():
-    """Initialize all required sheets with headers"""
+    """Initialize all required sheets with headers - runs only once"""
+    import time
+    
     sheets_config = {
         SHEET_USERS: ["id", "username", "password_hash", "role", "full_name", "phone", "is_active", "created_at"],
         SHEET_EMPLOYEE_ARRIVALS: ["id", "date", "kms_year", "mandi_name", "vehicle_number", "bags", 
@@ -108,8 +110,21 @@ def init_sheets():
         SHEET_VEHICLES: ["id", "vehicle_number", "owner_name", "puc_expiry_date", "permit_number", "is_active"]
     }
     
+    spreadsheet = get_spreadsheet()
+    if not spreadsheet:
+        return
+    
+    # Get existing sheet names
+    existing_sheets = [ws.title for ws in spreadsheet.worksheets()]
+    
     for sheet_name, headers in sheets_config.items():
-        get_or_create_worksheet(sheet_name, headers)
+        if sheet_name not in existing_sheets:
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
+            worksheet.append_row(headers)
+            time.sleep(1)  # Rate limiting
+    
+    # Add default data only if sheets are empty
+    time.sleep(1)
     
     # Add default admin if not exists
     users_df = get_all_data(SHEET_USERS)
@@ -124,6 +139,7 @@ def init_sheets():
             "is_active": "1",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
+        time.sleep(1)
     
     # Add default mandis if not exists
     mandis_df = get_all_data(SHEET_MANDIS)
@@ -132,12 +148,14 @@ def init_sheets():
                   'MARIWADA', 'MARKAPALLY', 'MATAPAKA', 'PUSUGUDA', 'UDDUPA']
         for i, mandi in enumerate(mandis, 1):
             add_row(SHEET_MANDIS, {"id": i, "mandi_name": mandi, "distance_km": 0})
+            time.sleep(0.5)
     
     # Add default godowns if not exists
     godowns_df = get_all_data(SHEET_GODOWNS)
     if godowns_df.empty:
         for i, godown in enumerate(['Hoper', 'G-3', 'S-2'], 1):
             add_row(SHEET_GODOWNS, {"id": i, "godown_name": godown})
+            time.sleep(0.5)
     
     # Add default vehicles if not exists
     vehicles_df = get_all_data(SHEET_VEHICLES)
@@ -149,9 +167,20 @@ def init_sheets():
                 "id": i, "vehicle_number": vehicle, "owner_name": "", 
                 "puc_expiry_date": "", "permit_number": "", "is_active": "1"
             })
+            time.sleep(0.5)
 
 def get_all_data(sheet_name):
-    """Get all data from a sheet as DataFrame"""
+    """Get all data from a sheet as DataFrame - with caching"""
+    # Use session state cache to reduce API calls
+    cache_key = f"cache_{sheet_name}"
+    cache_time_key = f"cache_time_{sheet_name}"
+    
+    # Check if cached data exists and is less than 30 seconds old
+    if cache_key in st.session_state and cache_time_key in st.session_state:
+        cache_age = (datetime.now() - st.session_state[cache_time_key]).total_seconds()
+        if cache_age < 30:  # Use cache for 30 seconds
+            return st.session_state[cache_key]
+    
     try:
         spreadsheet = get_spreadsheet()
         if not spreadsheet:
@@ -159,12 +188,33 @@ def get_all_data(sheet_name):
         
         worksheet = spreadsheet.worksheet(sheet_name)
         data = worksheet.get_all_records()
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+        
+        # Store in cache
+        st.session_state[cache_key] = df
+        st.session_state[cache_time_key] = datetime.now()
+        
+        return df
     except gspread.WorksheetNotFound:
         return pd.DataFrame()
     except Exception as e:
         st.error(f"Error reading {sheet_name}: {e}")
         return pd.DataFrame()
+
+def clear_cache(sheet_name=None):
+    """Clear cached data to force fresh read"""
+    if sheet_name:
+        cache_key = f"cache_{sheet_name}"
+        cache_time_key = f"cache_time_{sheet_name}"
+        if cache_key in st.session_state:
+            del st.session_state[cache_key]
+        if cache_time_key in st.session_state:
+            del st.session_state[cache_time_key]
+    else:
+        # Clear all caches
+        keys_to_delete = [k for k in st.session_state.keys() if k.startswith("cache_")]
+        for k in keys_to_delete:
+            del st.session_state[k]
 
 def add_row(sheet_name, data_dict):
     """Add a row to a sheet"""
@@ -177,6 +227,7 @@ def add_row(sheet_name, data_dict):
         headers = worksheet.row_values(1)
         row = [str(data_dict.get(h, "")) for h in headers]
         worksheet.append_row(row)
+        clear_cache(sheet_name)  # Clear cache after adding
         return True
     except Exception as e:
         st.error(f"Error adding row to {sheet_name}: {e}")
@@ -198,6 +249,7 @@ def update_row(sheet_name, row_id, data_dict):
                 for j, header in enumerate(headers, start=1):
                     if header in data_dict:
                         worksheet.update_cell(i, j, str(data_dict[header]))
+                clear_cache(sheet_name)  # Clear cache after updating
                 return True
         return False
     except Exception as e:
@@ -217,6 +269,7 @@ def delete_row(sheet_name, row_id):
         for i, row in enumerate(data, start=2):
             if str(row.get('id')) == str(row_id):
                 worksheet.delete_rows(i)
+                clear_cache(sheet_name)  # Clear cache after deleting
                 return True
         return False
     except Exception as e:
