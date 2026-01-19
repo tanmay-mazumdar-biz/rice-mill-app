@@ -1,379 +1,932 @@
+"""
+Rice Mill Procurement System v2.0
+With Google Sheets Integration for Permanent Data Storage
+"""
+
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 import hashlib
 from datetime import datetime, date, timedelta
-from io import BytesIO
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Google Sheets setup
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+# Page configuration
+st.set_page_config(
+    page_title="Rice Mill Procurement System",
+    page_icon="🌾",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Constants
+WEIGHT_PER_BAG = 0.51  # Quintals per bag (51 kg)
+DIFFERENCE_THRESHOLD = 2.0  # Quintals - flag if difference exceeds this
+SHEET_ID = "1GzSLPc0v1qyuPdxbW-_wut2LF78_MxltVkbGwh8TvVg"
+
+# Sheet names
+SHEET_USERS = "Users"
+SHEET_EMPLOYEE_ARRIVALS = "Employee_Arrivals"
+SHEET_ADMIN_ARRIVALS = "Admin_Arrivals"
+SHEET_MASTER_STOCK = "Master_Stock"
+SHEET_MANDIS = "Mandis"
+SHEET_GODOWNS = "Godowns"
+SHEET_VEHICLES = "Vehicles"
+
+def get_kms_year_from_date(entry_date):
+    """Auto-detect KMS year from date. KMS year runs Oct to Sep."""
+    if isinstance(entry_date, str):
+        entry_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+    
+    year = entry_date.year
+    month = entry_date.month
+    
+    if month >= 10:
+        kms_start_year = year
+    else:
+        kms_start_year = year - 1
+    
+    kms_end_year = kms_start_year + 1
+    return f"{kms_start_year}-{str(kms_end_year)[-2:]}"
+
+def get_current_kms_year():
+    """Get KMS year for current date"""
+    return get_kms_year_from_date(date.today())
+
+# ============== GOOGLE SHEETS CONNECTION ==============
 
 @st.cache_resource
-def get_google_sheets_client():
-    """Initialize Google Sheets client"""
+def get_gsheet_connection():
+    """Create Google Sheets connection"""
     try:
         credentials = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=SCOPES
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
         )
-        return gspread.authorize(credentials)
+        client = gspread.authorize(credentials)
+        return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
         return None
 
-# Page configuration
-st.set_page_config(
-    page_title="Rice Mill System (Cloud)",
-    page_icon="🌾",
-    layout="wide"
-)
-
-# --- CONFIGURATION ---
-SHEET_NAME = "Rice Mill Database"  # Make sure your Google Sheet has this EXACT name
-WEIGHT_PER_BAG = 0.51
-DIFFERENCE_THRESHOLD = 2.0
-
-# --- GOOGLE SHEETS CONNECTION ---
-def get_gsheet_connection():
-    """Connect to Google Sheets using Streamlit Secrets"""
-    # Create a credentials object from the secrets dictionary
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    
-    # We construct the creds dict from st.secrets
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    client = gspread.authorize(creds)
-    
-    return client.open(SHEET_NAME)
-
-def get_data(worksheet_name):
-    """Fetch all records as DataFrame"""
-    try:
-        sh = get_gsheet_connection()
-        worksheet = sh.worksheet(worksheet_name)
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-    except gspread.WorksheetNotFound:
-        st.error(f"❌ Worksheet '{worksheet_name}' not found!")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Connection Error: {e}")
-        return pd.DataFrame()
-
-# --- HELPER FUNCTIONS ---
-def get_kms_year_from_date(entry_date):
-    if isinstance(entry_date, str):
-        entry_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
-    year = entry_date.year
-    month = entry_date.month
-    if month >= 10:
-        kms_start = year
-    else:
-        kms_start = year - 1
-    return f"{kms_start}-{str(kms_start + 1)[-2:]}"
-
-def get_current_kms_year():
-    return get_kms_year_from_date(date.today())
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Data')
-    return output.getvalue()
-
-# --- DATA LOGIC ---
-
-def verify_login(username, password):
-    df = get_data("Users")
-    if df.empty: return None
-    hashed = hash_password(password)
-    # Ensure columns exist to prevent errors
-    if 'username' not in df.columns: return None
-    
-    user = df[(df['username'] == username) & (df['password_hash'] == hashed)]
-    if not user.empty:
-        row = user.iloc[0]
-        # Return tuple: (fake_id, username, role, full_name)
-        return (999, row['username'], row['role'], row['full_name'])
+def get_spreadsheet():
+    """Get the spreadsheet object"""
+    client = get_gsheet_connection()
+    if client:
+        return client.open_by_key(SHEET_ID)
     return None
 
-def update_stock_logic(kms_year):
-    """Re-calculate master stock and OVERWRITE the sheet"""
+def get_or_create_worksheet(sheet_name, headers):
+    """Get worksheet or create if not exists"""
+    spreadsheet = get_spreadsheet()
+    if not spreadsheet:
+        return None
+    
     try:
-        # 1. Fetch Data
-        admin_df = get_data("Admin_Arrivals")
-        stock_df = get_data("Master_Stock")
+        worksheet = spreadsheet.worksheet(sheet_name)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
+        worksheet.append_row(headers)
+    
+    return worksheet
+
+def init_sheets():
+    """Initialize all required sheets with headers"""
+    sheets_config = {
+        SHEET_USERS: ["id", "username", "password_hash", "role", "full_name", "phone", "is_active", "created_at"],
+        SHEET_EMPLOYEE_ARRIVALS: ["id", "date", "kms_year", "mandi_name", "vehicle_number", "bags", 
+                                   "weight_quintals", "godown", "expected_weight", "difference", 
+                                   "entered_by", "entry_timestamp", "remarks"],
+        SHEET_ADMIN_ARRIVALS: ["id", "date", "kms_year", "mandi_name", "vehicle_number", "ac_note",
+                               "quantity_quintals", "entered_by", "entry_timestamp", "remarks"],
+        SHEET_MASTER_STOCK: ["id", "date", "kms_year", "opening_balance", "received_today", "prog_received",
+                             "total", "issued_milling", "prog_milling", "closing_balance", "remarks"],
+        SHEET_MANDIS: ["id", "mandi_name", "distance_km"],
+        SHEET_GODOWNS: ["id", "godown_name"],
+        SHEET_VEHICLES: ["id", "vehicle_number", "owner_name", "puc_expiry_date", "permit_number", "is_active"]
+    }
+    
+    for sheet_name, headers in sheets_config.items():
+        get_or_create_worksheet(sheet_name, headers)
+    
+    # Add default admin if not exists
+    users_df = get_all_data(SHEET_USERS)
+    if users_df.empty:
+        add_row(SHEET_USERS, {
+            "id": 1,
+            "username": "admin",
+            "password_hash": hash_password("admin123"),
+            "role": "admin",
+            "full_name": "Administrator",
+            "phone": "",
+            "is_active": "1",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+    
+    # Add default mandis if not exists
+    mandis_df = get_all_data(SHEET_MANDIS)
+    if mandis_df.empty:
+        mandis = ['BHEJENGIWADA', 'CHALANGUDA', 'GUMKA', 'KALIMELA', 'M.V-11', 'M.V-26',
+                  'MARIWADA', 'MARKAPALLY', 'MATAPAKA', 'PUSUGUDA', 'UDDUPA']
+        for i, mandi in enumerate(mandis, 1):
+            add_row(SHEET_MANDIS, {"id": i, "mandi_name": mandi, "distance_km": 0})
+    
+    # Add default godowns if not exists
+    godowns_df = get_all_data(SHEET_GODOWNS)
+    if godowns_df.empty:
+        for i, godown in enumerate(['Hoper', 'G-3', 'S-2'], 1):
+            add_row(SHEET_GODOWNS, {"id": i, "godown_name": godown})
+    
+    # Add default vehicles if not exists
+    vehicles_df = get_all_data(SHEET_VEHICLES)
+    if vehicles_df.empty:
+        vehicles = ['AP31TU1719', 'CG08Z6713', 'CG17KL6229', 'OD30A9549', 'OD30B3879',
+                    'OD30B5356', 'OD30H0487', 'OR10C5722', 'OR301611']
+        for i, vehicle in enumerate(vehicles, 1):
+            add_row(SHEET_VEHICLES, {
+                "id": i, "vehicle_number": vehicle, "owner_name": "", 
+                "puc_expiry_date": "", "permit_number": "", "is_active": "1"
+            })
+
+def get_all_data(sheet_name):
+    """Get all data from a sheet as DataFrame"""
+    try:
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            return pd.DataFrame()
         
-        if admin_df.empty:
-            return True # Nothing to calculate
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_records()
+        return pd.DataFrame(data)
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error reading {sheet_name}: {e}")
+        return pd.DataFrame()
 
-        # Filter for current year
-        admin_df = admin_df[admin_df['kms_year'] == kms_year]
+def add_row(sheet_name, data_dict):
+    """Add a row to a sheet"""
+    try:
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            return False
         
-        # 2. Capture Manual Edits (Issued Milling & Remarks)
-        manual_data = {}
-        if not stock_df.empty:
-            stock_df = stock_df[stock_df['kms_year'] == kms_year]
-            for _, row in stock_df.iterrows():
-                manual_data[str(row['date'])] = {
-                    'issued': row.get('issued_milling', 0),
-                    'remarks': row.get('remarks', '')
-                }
-
-        # 3. Calculate Daily Sums
-        daily_sums = admin_df.groupby('date')['quantity_quintals'].sum().reset_index()
-        daily_sums = daily_sums.sort_values('date')
-
-        # 4. Build New Rows
-        new_rows = []
-        prog_received = 0
-        prog_milling = 0
-        prev_closing = 0
-        
-        # Headers for the sheet
-        headers = ['date', 'kms_year', 'opening_balance', 'received_today', 'prog_received', 
-                   'total', 'issued_milling', 'prog_milling', 'closing_balance', 'remarks']
-
-        for _, row in daily_sums.iterrows():
-            d_date = str(row['date'])
-            received = float(row['quantity_quintals'])
-            
-            # Retrieve manual values
-            issued = float(manual_data.get(d_date, {}).get('issued', 0))
-            remarks = str(manual_data.get(d_date, {}).get('remarks', ''))
-            
-            prog_received += received
-            prog_milling += issued
-            
-            opening = prev_closing
-            total = opening + received
-            closing = total - issued
-            prev_closing = closing
-            
-            new_rows.append([d_date, kms_year, opening, received, prog_received, 
-                             total, issued, prog_milling, closing, remarks])
-
-        # 5. Write to Sheet (Clear & Replace)
-        sh = get_gsheet_connection()
-        ws = sh.worksheet("Master_Stock")
-        ws.clear()
-        ws.append_row(headers)
-        if new_rows:
-            ws.append_rows(new_rows)
-            
+        worksheet = spreadsheet.worksheet(sheet_name)
+        headers = worksheet.row_values(1)
+        row = [str(data_dict.get(h, "")) for h in headers]
+        worksheet.append_row(row)
         return True
     except Exception as e:
-        st.error(f"Stock Update Failed: {e}")
+        st.error(f"Error adding row to {sheet_name}: {e}")
         return False
 
-# --- UI COMPONENTS ---
+def update_row(sheet_name, row_id, data_dict):
+    """Update a row by ID"""
+    try:
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            return False
+        
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_records()
+        
+        for i, row in enumerate(data, start=2):  # Start from row 2 (after header)
+            if str(row.get('id')) == str(row_id):
+                headers = worksheet.row_values(1)
+                for j, header in enumerate(headers, start=1):
+                    if header in data_dict:
+                        worksheet.update_cell(i, j, str(data_dict[header]))
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating {sheet_name}: {e}")
+        return False
 
-def show_login():
-    st.markdown("<h1 style='text-align: center;'>🌾 Rice Mill (Cloud)</h1>", unsafe_allow_html=True)
+def delete_row(sheet_name, row_id):
+    """Delete a row by ID"""
+    try:
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            return False
+        
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_records()
+        
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id')) == str(row_id):
+                worksheet.delete_rows(i)
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error deleting from {sheet_name}: {e}")
+        return False
+
+def get_next_id(sheet_name):
+    """Get next available ID for a sheet"""
+    df = get_all_data(sheet_name)
+    if df.empty or 'id' not in df.columns:
+        return 1
+    return int(df['id'].max()) + 1
+
+# ============== HELPER FUNCTIONS ==============
+
+def hash_password(password):
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_login(username, password):
+    """Verify user credentials"""
+    users_df = get_all_data(SHEET_USERS)
+    if users_df.empty:
+        return None
+    
+    user = users_df[(users_df['username'] == username) & 
+                    (users_df['password_hash'] == hash_password(password)) &
+                    (users_df['is_active'].astype(str) == '1')]
+    
+    if not user.empty:
+        row = user.iloc[0]
+        return (row['id'], row['username'], row['role'], row['full_name'])
+    return None
+
+def get_employee_arrivals(kms_year, user=None, start_date=None, end_date=None):
+    """Fetch employee arrivals with filters"""
+    df = get_all_data(SHEET_EMPLOYEE_ARRIVALS)
+    if df.empty:
+        return df
+    
+    df = df[df['kms_year'] == kms_year]
+    
+    if user:
+        df = df[df['entered_by'] == user]
+    if start_date:
+        df = df[df['date'] >= str(start_date)]
+    if end_date:
+        df = df[df['date'] <= str(end_date)]
+    
+    return df.sort_values('date', ascending=False) if not df.empty else df
+
+def get_admin_arrivals(kms_year, start_date=None, end_date=None):
+    """Fetch admin arrivals with filters"""
+    df = get_all_data(SHEET_ADMIN_ARRIVALS)
+    if df.empty:
+        return df
+    
+    df = df[df['kms_year'] == kms_year]
+    
+    if start_date:
+        df = df[df['date'] >= str(start_date)]
+    if end_date:
+        df = df[df['date'] <= str(end_date)]
+    
+    return df.sort_values('date', ascending=False) if not df.empty else df
+
+def get_master_stock(kms_year):
+    """Fetch master stock for KMS year"""
+    df = get_all_data(SHEET_MASTER_STOCK)
+    if df.empty:
+        return df
+    
+    df = df[df['kms_year'] == kms_year]
+    return df.sort_values('date') if not df.empty else df
+
+def update_master_stock(kms_year):
+    """Recalculate master stock from admin arrivals"""
+    admin_df = get_all_data(SHEET_ADMIN_ARRIVALS)
+    if admin_df.empty:
+        return
+    
+    admin_df = admin_df[admin_df['kms_year'] == kms_year]
+    if admin_df.empty:
+        return
+    
+    # Group by date
+    admin_df['quantity_quintals'] = pd.to_numeric(admin_df['quantity_quintals'], errors='coerce')
+    daily = admin_df.groupby('date')['quantity_quintals'].sum().reset_index()
+    daily = daily.sort_values('date')
+    
+    # Get existing stock data to preserve issued_milling
+    stock_df = get_all_data(SHEET_MASTER_STOCK)
+    existing_issued = {}
+    if not stock_df.empty:
+        stock_kms = stock_df[stock_df['kms_year'] == kms_year]
+        for _, row in stock_kms.iterrows():
+            existing_issued[row['date']] = float(row.get('issued_milling', 0) or 0)
+    
+    # Clear existing stock for this KMS year
+    if not stock_df.empty:
+        ids_to_delete = stock_df[stock_df['kms_year'] == kms_year]['id'].tolist()
+        for rid in ids_to_delete:
+            delete_row(SHEET_MASTER_STOCK, rid)
+    
+    # Recalculate
+    prog_received = 0
+    prog_milling = 0
+    prev_closing = 0
+    
+    for _, row in daily.iterrows():
+        stock_date = row['date']
+        received = row['quantity_quintals']
+        prog_received += received
+        issued = existing_issued.get(stock_date, 0)
+        prog_milling += issued
+        
+        opening = prev_closing
+        total = opening + received
+        closing = total - issued
+        prev_closing = closing
+        
+        add_row(SHEET_MASTER_STOCK, {
+            "id": get_next_id(SHEET_MASTER_STOCK),
+            "date": stock_date,
+            "kms_year": kms_year,
+            "opening_balance": opening,
+            "received_today": received,
+            "prog_received": prog_received,
+            "total": total,
+            "issued_milling": issued,
+            "prog_milling": prog_milling,
+            "closing_balance": closing,
+            "remarks": ""
+        })
+
+def to_excel(df):
+    """Convert DataFrame to Excel bytes"""
+    from io import BytesIO
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
+# ============== UI COMPONENTS ==============
+
+def show_login_page():
+    """Display login page"""
+    st.markdown("""
+        <div style='text-align: center; padding: 50px;'>
+            <h1>🌾 Rice Mill Procurement System</h1>
+            <p style='color: #666;'>Please login to continue</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        with st.form("login"):
-            user = st.text_input("Username")
-            pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("Login", use_container_width=True):
-                user_data = verify_login(user, pwd)
-                if user_data:
-                    st.session_state['logged_in'] = True
-                    st.session_state['username'] = user_data[1]
-                    st.session_state['role'] = user_data[2]
-                    st.session_state['full_name'] = user_data[3]
-                    st.rerun()
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("🔐 Login", use_container_width=True)
+            
+            if submit:
+                if username and password:
+                    user = verify_login(username, password)
+                    if user:
+                        st.session_state['logged_in'] = True
+                        st.session_state['user_id'] = user[0]
+                        st.session_state['username'] = user[1]
+                        st.session_state['role'] = user[2]
+                        st.session_state['full_name'] = user[3]
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid username or password")
                 else:
-                    st.error("Invalid Login")
+                    st.warning("⚠️ Please enter username and password")
+        
+        st.markdown("---")
+        st.markdown("""
+            <div style='text-align: center; color: #888; font-size: 12px;'>
+                <p>Default Admin: admin / admin123</p>
+            </div>
+        """, unsafe_allow_html=True)
 
-def show_dashboard():
-    # Sidebar
-    st.sidebar.title(f"👤 {st.session_state['full_name']}")
-    st.sidebar.write(f"Role: **{st.session_state['role'].upper()}**")
+def show_sidebar():
+    """Display sidebar"""
+    with st.sidebar:
+        st.markdown(f"### 👤 {st.session_state['full_name']}")
+        st.markdown(f"**Role:** {'🔑 Admin' if st.session_state['role'] == 'admin' else '👷 Employee'}")
+        
+        st.markdown("---")
+        
+        # KMS Year Selection
+        st.subheader("📅 KMS Year")
+        current_kms = get_current_kms_year()
+        current_start = int(current_kms.split("-")[0])
+        year_options = [f"{y}-{str(y+1)[-2:]}" for y in range(current_start-2, current_start+2)]
+        default_idx = year_options.index(current_kms) if current_kms in year_options else 0
+        kms_year = st.selectbox("Select Year", year_options, index=default_idx, label_visibility="collapsed")
+        st.session_state['kms_year'] = kms_year
+        st.caption(f"Current KMS: {current_kms}")
+        
+        st.markdown("---")
+        
+        if st.button("🚪 Logout", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+def show_employee_dashboard():
+    """Display employee dashboard"""
+    st.title("🌾 Rice Mill - Employee Portal")
     
-    current_kms = get_current_kms_year()
-    years = [f"{y}-{str(y+1)[-2:]}" for y in range(int(current_kms[:4])-1, int(current_kms[:4])+2)]
-    kms_year = st.sidebar.selectbox("KMS Year", years, index=1)
+    tab1, tab2, tab3 = st.tabs(["📝 New Entry", "📋 My Entries", "📊 My Summary"])
     
-    if st.sidebar.button("Logout"):
-        st.session_state.clear()
-        st.rerun()
-
-    # Main Area
-    if st.session_state['role'] == 'admin':
-        admin_portal(kms_year)
-    else:
-        employee_portal(kms_year)
-
-# --- PORTALS ---
-
-def employee_portal(kms_year):
-    st.title("👷 Employee Portal")
-    tab1, tab2 = st.tabs(["New Entry", "My Entries"])
+    kms_year = st.session_state['kms_year']
+    username = st.session_state['username']
     
+    # TAB 1: New Entry
     with tab1:
+        st.subheader("Add New Arrival Entry")
+        
         col1, col2 = st.columns(2)
+        
         with col1:
-            date_val = st.date_input("Date")
-            mandi_df = get_data("Settings_Mandi")
-            mandis = mandi_df['mandi_name'].tolist() if not mandi_df.empty else []
-            mandi = st.selectbox("Mandi", mandis)
-            bags = st.number_input("Bags", min_value=1, step=1)
+            entry_date = st.date_input("Date", value=date.today(), max_value=date.today())
+            entry_kms_year = get_kms_year_from_date(entry_date)
+            st.caption(f"📅 KMS Year: **{entry_kms_year}**")
+            
+            days_old = (date.today() - entry_date).days
+            if days_old > 7:
+                st.warning(f"⚠️ Entry is {days_old} days old.")
+            
+            mandis_df = get_all_data(SHEET_MANDIS)
+            if not mandis_df.empty:
+                mandi_options = mandis_df['mandi_name'].tolist()
+                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options)
+                selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
+                if selected_mandi:
+                    st.info(f"📍 Selected: **{selected_mandi}**")
+            else:
+                st.warning("⚠️ No mandis configured.")
+                selected_mandi = None
+            
+            bags = st.number_input("Number of Bags", min_value=0, value=0, step=1)
         
         with col2:
-            veh_df = get_data("Vehicle_Registry")
-            # Filter active vehicles
-            if not veh_df.empty and 'is_active' in veh_df.columns:
-                vehs = veh_df[veh_df['is_active'] == 1]['vehicle_number'].tolist()
+            vehicles_df = get_all_data(SHEET_VEHICLES)
+            vehicles_df = vehicles_df[vehicles_df['is_active'].astype(str) == '1'] if not vehicles_df.empty else vehicles_df
+            
+            if not vehicles_df.empty:
+                vehicle_options = vehicles_df['vehicle_number'].tolist()
+                selected_vehicle = st.selectbox("Vehicle Number", vehicle_options)
             else:
-                vehs = veh_df['vehicle_number'].tolist() if not veh_df.empty else []
-                
-            vehicle = st.selectbox("Vehicle", vehs)
-            weight = st.number_input("Weight (Quintals)", min_value=0.0)
+                st.warning("⚠️ No vehicles registered.")
+                selected_vehicle = None
             
-            godown_df = get_data("Settings_Godown")
-            godowns = godown_df['godown_name'].tolist() if not godown_df.empty else []
-            godown = st.selectbox("Godown", godowns)
-
-        # Calculation
-        expected = round(bags * WEIGHT_PER_BAG, 2)
-        diff = round(weight - expected, 2)
+            godowns_df = get_all_data(SHEET_GODOWNS)
+            if not godowns_df.empty:
+                godown_options = godowns_df['godown_name'].tolist()
+                selected_godown = st.selectbox("Godown", godown_options)
+            else:
+                selected_godown = None
+            
+            weight = st.number_input("Actual Weight (Quintals)", min_value=0.0, value=0.0, step=0.1)
         
-        st.info(f"Expected: {expected} Q | Actual: {weight} Q | Diff: {diff} Q")
+        # Auto-calculated fields
+        if bags > 0:
+            expected_weight = round(bags * WEIGHT_PER_BAG, 2)
+            difference = round(weight - expected_weight, 2)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Expected Weight", f"{expected_weight} Q")
+            col2.metric("Actual Weight", f"{weight} Q")
+            
+            if abs(difference) > DIFFERENCE_THRESHOLD:
+                col3.metric("Difference", f"{difference:+.2f} Q", delta_color="inverse")
+                st.warning(f"⚠️ Difference exceeds ±{DIFFERENCE_THRESHOLD} Q")
+            else:
+                col3.metric("Difference", f"{difference:+.2f} Q")
+        else:
+            expected_weight = 0
+            difference = 0
         
-        if st.button("Submit Entry", type="primary"):
-            sh = get_gsheet_connection()
-            ws = sh.worksheet("Employee_Arrivals")
-            # date, kms_year, mandi_name, vehicle_number, bags, weight_quintals, godown, expected_weight, difference, entered_by, remarks
-            ws.append_row([str(date_val), kms_year, mandi, vehicle, bags, weight, godown, expected, diff, st.session_state['username'], ""])
-            st.success("Saved to Google Sheets!")
-
-    with tab2:
-        df = get_data("Employee_Arrivals")
-        if not df.empty:
-            df = df[df['entered_by'] == st.session_state['username']]
-            st.dataframe(df)
-
-def admin_portal(kms_year):
-    st.title("🔑 Admin Portal")
-    tabs = st.tabs(["Entry", "Stock", "Vehicles", "Settings"])
+        remarks = st.text_input("Remarks (Optional)")
+        
+        st.markdown("---")
+        
+        if st.button("💾 Submit Entry", type="primary", use_container_width=True):
+            if not selected_mandi:
+                st.error("❌ Please select a mandi")
+            elif not selected_vehicle:
+                st.error("❌ Please select a vehicle")
+            elif bags <= 0:
+                st.error("❌ Bags must be greater than 0")
+            elif weight <= 0:
+                st.error("❌ Weight must be greater than 0")
+            else:
+                success = add_row(SHEET_EMPLOYEE_ARRIVALS, {
+                    "id": get_next_id(SHEET_EMPLOYEE_ARRIVALS),
+                    "date": str(entry_date),
+                    "kms_year": entry_kms_year,
+                    "mandi_name": selected_mandi,
+                    "vehicle_number": selected_vehicle,
+                    "bags": bags,
+                    "weight_quintals": weight,
+                    "godown": selected_godown or "",
+                    "expected_weight": expected_weight,
+                    "difference": difference,
+                    "entered_by": username,
+                    "entry_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "remarks": remarks
+                })
+                
+                if success:
+                    st.success("✅ Entry saved successfully!")
+                    st.balloons()
     
-    # 1. ADMIN ENTRY
-    with tabs[0]:
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.subheader("Add Arrival")
-            a_date = st.date_input("Date", key="ad_date")
-            
-            mandi_df = get_data("Settings_Mandi")
-            mandi_list = mandi_df['mandi_name'].tolist() if not mandi_df.empty else []
-            a_mandi = st.selectbox("Mandi", mandi_list, key="ad_mandi")
-            
-            veh_df = get_data("Vehicle_Registry")
-            veh_list = veh_df['vehicle_number'].tolist() if not veh_df.empty else []
-            a_veh = st.selectbox("Vehicle", veh_list, key="ad_veh")
-            
-            a_note = st.text_input("AC Note No")
-            a_qty = st.number_input("Quantity (Q)", min_value=0.1)
-            
-            if st.button("Save Arrival"):
-                sh = get_gsheet_connection()
-                ws = sh.worksheet("Admin_Arrivals")
-                # date, kms_year, mandi_name, vehicle_number, ac_note, quantity_quintals, entered_by, remarks
-                ws.append_row([str(a_date), kms_year, a_mandi, a_veh, a_note, a_qty, st.session_state['username'], ""])
-                update_stock_logic(kms_year)
-                st.success("Saved & Stock Updated!")
-                st.rerun()
-
-        with c2:
-            st.subheader("Recent Entries")
-            df = get_data("Admin_Arrivals")
-            if not df.empty:
-                df = df[df['kms_year'] == kms_year]
-                # Add index for deletion (Sheet row = index + 2)
-                df['sheet_row'] = df.index + 2 
-                st.dataframe(df[['date', 'mandi_name', 'vehicle_number', 'quantity_quintals']])
-                
-                # Delete Logic
-                row_to_del = st.number_input("Row ID to Delete (Check Sheet)", min_value=2, step=1)
-                if st.button("Delete Row"):
-                    sh = get_gsheet_connection()
-                    ws = sh.worksheet("Admin_Arrivals")
-                    ws.delete_rows(int(row_to_del))
-                    update_stock_logic(kms_year)
-                    st.warning("Deleted!")
-                    st.rerun()
-
-    # 2. STOCK
-    with tabs[1]:
-        if st.button("Force Recalculate Stock"):
-            update_stock_logic(kms_year)
-            st.success("Recalculated!")
-            
-        stock = get_data("Master_Stock")
-        if not stock.empty:
-            stock = stock[stock['kms_year'] == kms_year]
-            
-            # Editable Grid for "Issued Milling"
-            edited_df = st.data_editor(stock[['date', 'received_today', 'issued_milling', 'closing_balance']], key="stock_edit")
-            
-            if st.button("Save Stock Changes"):
-                # This is tricky in Sheets. For now, simple logic:
-                # We iterate the edited DF and update the sheet.
-                # NOTE: This is a basic implementation.
-                sh = get_gsheet_connection()
-                ws = sh.worksheet("Master_Stock")
-                
-                # We need to find the matching row for each date and update Col 7 (Issued)
-                # This is slow, but safe.
-                all_records = ws.get_all_records()
-                for i, record in enumerate(all_records):
-                    # Find matching date in edited_df
-                    row_date = record['date']
-                    match = edited_df[edited_df['date'] == row_date]
-                    if not match.empty:
-                        new_issued = match.iloc[0]['issued_milling']
-                        # Update cell (Row = i+2, Col = 7)
-                        ws.update_cell(i+2, 7, new_issued)
-                
-                update_stock_logic(kms_year) # Recalc totals after update
-                st.success("Updated!")
-
-    # 3. VEHICLES
-    with tabs[2]:
-        new_v = st.text_input("New Vehicle No")
-        new_o = st.text_input("Owner")
-        if st.button("Add Vehicle"):
-            sh = get_gsheet_connection()
-            ws = sh.worksheet("Vehicle_Registry")
-            ws.append_row([new_v, new_o, "", "", 1])
-            st.success("Added!")
-            
-        v_data = get_data("Vehicle_Registry")
-        st.dataframe(v_data)
-
-    # 4. SETTINGS
-    with tabs[3]:
-        st.write("Edit Mandis/Godowns directly in Google Sheets for now.")
-        st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID)")
-
-# --- MAIN ---
-if __name__ == "__main__":
-    if 'logged_in' not in st.session_state:
-        st.session_state['logged_in'] = False
+    # TAB 2: My Entries
+    with tab2:
+        st.subheader("My Entries")
         
-    if st.session_state['logged_in']:
-        show_dashboard()
-    else:
-        show_login()
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("From Date", value=date.today() - timedelta(days=30), key="emp_start")
+        with col2:
+            end_date = st.date_input("To Date", value=date.today(), key="emp_end")
+        
+        entries_df = get_employee_arrivals(kms_year, username, start_date, end_date)
+        
+        if not entries_df.empty:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Entries", len(entries_df))
+            col2.metric("Total Bags", f"{entries_df['bags'].astype(int).sum():,}")
+            col3.metric("Total Weight", f"{entries_df['weight_quintals'].astype(float).sum():,.2f} Q")
+            col4.metric("Avg Diff", f"{entries_df['difference'].astype(float).mean():+.2f} Q")
+            
+            st.markdown("---")
+            st.dataframe(entries_df[['date', 'mandi_name', 'vehicle_number', 'bags', 
+                                     'weight_quintals', 'godown', 'difference']], 
+                        use_container_width=True, hide_index=True)
+            
+            st.download_button(
+                "📥 Download My Entries",
+                to_excel(entries_df),
+                f"my_entries_{kms_year}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("ℹ️ No entries found.")
+    
+    # TAB 3: My Summary
+    with tab3:
+        st.subheader("My Performance Summary")
+        
+        all_entries = get_employee_arrivals(kms_year, username)
+        
+        if not all_entries.empty:
+            all_entries['bags'] = all_entries['bags'].astype(int)
+            all_entries['weight_quintals'] = all_entries['weight_quintals'].astype(float)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("##### 📊 By Mandi")
+                mandi_summary = all_entries.groupby('mandi_name').agg({
+                    'bags': 'sum',
+                    'weight_quintals': 'sum'
+                }).sort_values('weight_quintals', ascending=False)
+                st.dataframe(mandi_summary, use_container_width=True)
+            
+            with col2:
+                st.markdown("##### 🚛 By Vehicle")
+                vehicle_summary = all_entries.groupby('vehicle_number').agg({
+                    'bags': 'sum',
+                    'weight_quintals': 'sum'
+                }).sort_values('weight_quintals', ascending=False)
+                st.dataframe(vehicle_summary, use_container_width=True)
+        else:
+            st.info("ℹ️ No entries found.")
 
+def show_admin_dashboard():
+    """Display admin dashboard"""
+    st.title("🌾 Rice Mill - Admin Portal")
+    
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📝 Admin Entry", "📊 Master Stock", "🔄 Comparison",
+        "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
+    ])
+    
+    kms_year = st.session_state['kms_year']
+    username = st.session_state['username']
+    
+    # TAB 1: Admin Entry
+    with tab1:
+        st.subheader("Official Arrival Register")
+        
+        entry_col, list_col = st.columns([1, 2])
+        
+        with entry_col:
+            st.markdown("##### ➕ Add Entry")
+            
+            entry_date = st.date_input("Date", value=date.today(), key="admin_date")
+            entry_kms_year = get_kms_year_from_date(entry_date)
+            st.caption(f"📅 KMS Year: **{entry_kms_year}**")
+            
+            mandis_df = get_all_data(SHEET_MANDIS)
+            if not mandis_df.empty:
+                mandi_options = mandis_df['mandi_name'].tolist()
+                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options, key="admin_mandi")
+                selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
+                if selected_mandi:
+                    st.info(f"📍 Selected: **{selected_mandi}**")
+            else:
+                selected_mandi = None
+            
+            vehicles_df = get_all_data(SHEET_VEHICLES)
+            vehicles_df = vehicles_df[vehicles_df['is_active'].astype(str) == '1'] if not vehicles_df.empty else vehicles_df
+            
+            if not vehicles_df.empty:
+                selected_vehicle = st.selectbox("Vehicle/Truck", vehicles_df['vehicle_number'].tolist(), key="admin_vehicle")
+            else:
+                selected_vehicle = None
+            
+            ac_note = st.text_input("A/C Note Number")
+            quantity = st.number_input("Quantity (Quintals)", min_value=0.0, value=0.0, step=0.1)
+            remarks = st.text_input("Remarks", key="admin_remarks")
+            
+            if st.button("💾 Add Entry", type="primary", use_container_width=True):
+                if not selected_mandi:
+                    st.error("❌ Please select a mandi")
+                elif not selected_vehicle:
+                    st.error("❌ Please select a vehicle")
+                elif quantity <= 0:
+                    st.error("❌ Quantity must be greater than 0")
+                else:
+                    success = add_row(SHEET_ADMIN_ARRIVALS, {
+                        "id": get_next_id(SHEET_ADMIN_ARRIVALS),
+                        "date": str(entry_date),
+                        "kms_year": entry_kms_year,
+                        "mandi_name": selected_mandi,
+                        "vehicle_number": selected_vehicle,
+                        "ac_note": ac_note,
+                        "quantity_quintals": quantity,
+                        "entered_by": username,
+                        "entry_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "remarks": remarks
+                    })
+                    
+                    if success:
+                        update_master_stock(entry_kms_year)
+                        st.success("✅ Entry added!")
+                        st.rerun()
+        
+        with list_col:
+            st.markdown("##### 📋 Arrival Register")
+            
+            admin_df = get_admin_arrivals(kms_year)
+            
+            if not admin_df.empty:
+                for date_val in admin_df['date'].unique():
+                    day_data = admin_df[admin_df['date'] == date_val]
+                    daily_total = day_data['quantity_quintals'].astype(float).sum()
+                    
+                    st.markdown(f"**📅 {date_val}** — Total: **{daily_total:.2f} Q**")
+                    
+                    for _, row in day_data.iterrows():
+                        cols = st.columns([2, 2, 1, 1, 1])
+                        cols[0].write(f"🏪 {row['mandi_name']}")
+                        cols[1].write(f"🚛 {row['vehicle_number']}")
+                        cols[2].write(f"📝 {row['ac_note'] or '-'}")
+                        cols[3].write(f"⚖️ {row['quantity_quintals']} Q")
+                        
+                        if cols[4].button("🗑️", key=f"del_{row['id']}"):
+                            delete_row(SHEET_ADMIN_ARRIVALS, row['id'])
+                            update_master_stock(kms_year)
+                            st.rerun()
+                    
+                    st.divider()
+                
+                total_qty = admin_df['quantity_quintals'].astype(float).sum()
+                st.markdown(f"### 📊 Total: {total_qty:.2f} Q")
+                
+                st.download_button(
+                    "📥 Download Register",
+                    to_excel(admin_df[['date', 'mandi_name', 'vehicle_number', 'ac_note', 'quantity_quintals']]),
+                    f"admin_register_{kms_year}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.info("ℹ️ No entries yet.")
+    
+    # TAB 2: Master Stock
+    with tab2:
+        st.subheader("Master Stock Register")
+        
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🔄 Recalculate", use_container_width=True):
+                update_master_stock(kms_year)
+                st.success("✅ Recalculated!")
+                st.rerun()
+        
+        stock_df = get_master_stock(kms_year)
+        
+        if not stock_df.empty:
+            display_df = stock_df[['date', 'opening_balance', 'received_today', 'prog_received',
+                                   'total', 'issued_milling', 'prog_milling', 'closing_balance']].copy()
+            display_df.columns = ['Date', 'O/B', 'Received', 'Prog.Recv', 'Total', 
+                                 'Issue Mill', 'Prog.Mill', 'C/B']
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Received", f"{stock_df['received_today'].astype(float).sum():.2f} Q")
+            col2.metric("Total Issued", f"{stock_df['issued_milling'].astype(float).sum():.2f} Q")
+            col3.metric("Current Stock", f"{stock_df['closing_balance'].astype(float).iloc[-1]:.2f} Q")
+            col4.metric("Prog. Received", f"{stock_df['prog_received'].astype(float).iloc[-1]:.2f} Q")
+            
+            st.download_button(
+                "📥 Download Stock Register",
+                to_excel(display_df),
+                f"master_stock_{kms_year}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("ℹ️ No stock data. Add arrivals first.")
+    
+    # TAB 3: Comparison
+    with tab3:
+        st.subheader("Employee vs Admin Comparison")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            comp_start = st.date_input("From", value=date.today() - timedelta(days=30), key="comp_start")
+        with col2:
+            comp_end = st.date_input("To", value=date.today(), key="comp_end")
+        
+        emp_df = get_employee_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
+        adm_df = get_admin_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
+        
+        if not emp_df.empty or not adm_df.empty:
+            emp_daily = emp_df.groupby('date')['weight_quintals'].apply(lambda x: x.astype(float).sum()) if not emp_df.empty else pd.Series()
+            adm_daily = adm_df.groupby('date')['quantity_quintals'].apply(lambda x: x.astype(float).sum()) if not adm_df.empty else pd.Series()
+            
+            all_dates = sorted(set(emp_daily.index) | set(adm_daily.index))
+            
+            comparison_data = []
+            for d in all_dates:
+                emp_val = emp_daily.get(d, 0)
+                adm_val = adm_daily.get(d, 0)
+                diff = emp_val - adm_val
+                
+                if emp_val == 0:
+                    status = "❌ Missing Employee"
+                elif adm_val == 0:
+                    status = "❌ Missing Admin"
+                elif abs(diff) < 1:
+                    status = "✅ Match"
+                elif abs(diff) < 50:
+                    status = "⚠️ Minor Diff"
+                else:
+                    status = "❌ Major Diff"
+                
+                comparison_data.append({
+                    'Date': d, 'Employee (Q)': emp_val, 'Admin (Q)': adm_val,
+                    'Difference': diff, 'Status': status
+                })
+            
+            comp_df = pd.DataFrame(comparison_data)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Employee Total", f"{emp_daily.sum():.2f} Q")
+            col2.metric("Admin Total", f"{adm_daily.sum():.2f} Q")
+            col3.metric("Difference", f"{emp_daily.sum() - adm_daily.sum():+.2f} Q")
+            
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ No data for comparison.")
+    
+    # TAB 4: Employee Data
+    with tab4:
+        st.subheader("Employee Entries")
+        
+        emp_entries = get_employee_arrivals(kms_year)
+        
+        if not emp_entries.empty:
+            st.dataframe(emp_entries[['date', 'mandi_name', 'vehicle_number', 'bags',
+                                      'weight_quintals', 'godown', 'difference', 'entered_by']],
+                        use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ No employee entries.")
+    
+    # TAB 5: Vehicles
+    with tab5:
+        st.subheader("Vehicle Registry")
+        
+        vcol1, vcol2 = st.columns([1, 2])
+        
+        with vcol1:
+            st.markdown("##### ➕ Add Vehicle")
+            new_vehicle = st.text_input("Vehicle Number")
+            new_owner = st.text_input("Owner Name")
+            
+            if st.button("➕ Add Vehicle", type="primary", use_container_width=True):
+                if new_vehicle:
+                    success = add_row(SHEET_VEHICLES, {
+                        "id": get_next_id(SHEET_VEHICLES),
+                        "vehicle_number": new_vehicle.strip().upper(),
+                        "owner_name": new_owner,
+                        "puc_expiry_date": "",
+                        "permit_number": "",
+                        "is_active": "1"
+                    })
+                    if success:
+                        st.success("✅ Added!")
+                        st.rerun()
+        
+        with vcol2:
+            vehicles_df = get_all_data(SHEET_VEHICLES)
+            if not vehicles_df.empty:
+                st.dataframe(vehicles_df[['vehicle_number', 'owner_name', 'is_active']], 
+                            use_container_width=True, hide_index=True)
+    
+    # TAB 6: Settings
+    with tab6:
+        settings_tab1, settings_tab2, settings_tab3 = st.tabs(["🏪 Mandis", "🏭 Godowns", "👥 Users"])
+        
+        with settings_tab1:
+            col1, col2 = st.columns(2)
+            with col1:
+                new_mandi = st.text_input("New Mandi Name")
+                if st.button("➕ Add Mandi", type="primary"):
+                    if new_mandi:
+                        add_row(SHEET_MANDIS, {
+                            "id": get_next_id(SHEET_MANDIS),
+                            "mandi_name": new_mandi.strip().upper(),
+                            "distance_km": 0
+                        })
+                        st.success("✅ Added!")
+                        st.rerun()
+            with col2:
+                mandis_df = get_all_data(SHEET_MANDIS)
+                if not mandis_df.empty:
+                    st.dataframe(mandis_df[['mandi_name']], use_container_width=True, hide_index=True)
+        
+        with settings_tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                new_godown = st.text_input("New Godown Name")
+                if st.button("➕ Add Godown", type="primary"):
+                    if new_godown:
+                        add_row(SHEET_GODOWNS, {
+                            "id": get_next_id(SHEET_GODOWNS),
+                            "godown_name": new_godown.strip()
+                        })
+                        st.success("✅ Added!")
+                        st.rerun()
+            with col2:
+                godowns_df = get_all_data(SHEET_GODOWNS)
+                if not godowns_df.empty:
+                    st.dataframe(godowns_df[['godown_name']], use_container_width=True, hide_index=True)
+        
+        with settings_tab3:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Add New User**")
+                new_username = st.text_input("Username")
+                new_password = st.text_input("Password", type="password")
+                new_fullname = st.text_input("Full Name")
+                new_role = st.selectbox("Role", ["employee", "admin"])
+                
+                if st.button("➕ Add User", type="primary"):
+                    if new_username and new_password:
+                        add_row(SHEET_USERS, {
+                            "id": get_next_id(SHEET_USERS),
+                            "username": new_username,
+                            "password_hash": hash_password(new_password),
+                            "role": new_role,
+                            "full_name": new_fullname,
+                            "phone": "",
+                            "is_active": "1",
+                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        st.success("✅ User created!")
+                        st.rerun()
+            with col2:
+                users_df = get_all_data(SHEET_USERS)
+                if not users_df.empty:
+                    st.dataframe(users_df[['username', 'role', 'full_name', 'is_active']], 
+                                use_container_width=True, hide_index=True)
+
+# ============== MAIN ==============
+
+def main():
+    # Initialize sheets on first run
+    if 'initialized' not in st.session_state:
+        with st.spinner("Connecting to database..."):
+            init_sheets()
+        st.session_state['initialized'] = True
+    
+    if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
+        show_login_page()
+    else:
+        show_sidebar()
+        if st.session_state['role'] == 'admin':
+            show_admin_dashboard()
+        else:
+            show_employee_dashboard()
+
+if __name__ == "__main__":
+    main()
