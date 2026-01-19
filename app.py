@@ -28,6 +28,7 @@ SHEET_USERS = "Users"
 SHEET_EMPLOYEE_ARRIVALS = "Employee_Arrivals"
 SHEET_ADMIN_ARRIVALS = "Admin_Arrivals"
 SHEET_MASTER_STOCK = "Master_Stock"
+SHEET_MILLING = "Milling"
 SHEET_MANDIS = "Mandis"
 SHEET_GODOWNS = "Godowns"
 SHEET_VEHICLES = "Vehicles"
@@ -118,8 +119,7 @@ def init_sheets():
                                    "entered_by", "entry_timestamp", "remarks"],
         SHEET_ADMIN_ARRIVALS: ["id", "date", "kms_year", "mandi_name", "vehicle_number", "ac_note",
                                "quantity_quintals", "entered_by", "entry_timestamp", "remarks"],
-        SHEET_MASTER_STOCK: ["id", "date", "kms_year", "opening_balance", "received_today", "prog_received",
-                             "total", "issued_milling", "prog_milling", "closing_balance", "remarks"],
+        SHEET_MILLING: ["id", "date", "kms_year", "issued_quintals", "remarks", "entered_by", "entry_timestamp"],
         SHEET_MANDIS: ["id", "mandi_name", "distance_km"],
         SHEET_GODOWNS: ["id", "godown_name"],
         SHEET_VEHICLES: ["id", "vehicle_number", "owner_name", "puc_expiry_date", "permit_number", "is_active"]
@@ -364,75 +364,6 @@ def get_admin_arrivals(kms_year, start_date=None, end_date=None):
         df = df[df['date'] <= str(end_date)]
     
     return df.sort_values('date', ascending=False) if not df.empty else df
-
-def get_master_stock(kms_year):
-    """Fetch master stock for KMS year"""
-    df = get_all_data(SHEET_MASTER_STOCK)
-    if df.empty:
-        return df
-    
-    df = df[df['kms_year'] == kms_year]
-    return df.sort_values('date') if not df.empty else df
-
-def update_master_stock(kms_year):
-    """Recalculate master stock from admin arrivals"""
-    admin_df = get_all_data(SHEET_ADMIN_ARRIVALS)
-    if admin_df.empty:
-        return
-    
-    admin_df = admin_df[admin_df['kms_year'] == kms_year]
-    if admin_df.empty:
-        return
-    
-    # Group by date
-    admin_df['quantity_quintals'] = pd.to_numeric(admin_df['quantity_quintals'], errors='coerce')
-    daily = admin_df.groupby('date')['quantity_quintals'].sum().reset_index()
-    daily = daily.sort_values('date')
-    
-    # Get existing stock data to preserve issued_milling
-    stock_df = get_all_data(SHEET_MASTER_STOCK)
-    existing_issued = {}
-    if not stock_df.empty:
-        stock_kms = stock_df[stock_df['kms_year'] == kms_year]
-        for _, row in stock_kms.iterrows():
-            existing_issued[row['date']] = float(row.get('issued_milling', 0) or 0)
-    
-    # Clear existing stock for this KMS year
-    if not stock_df.empty:
-        ids_to_delete = stock_df[stock_df['kms_year'] == kms_year]['id'].tolist()
-        for rid in ids_to_delete:
-            delete_row(SHEET_MASTER_STOCK, rid)
-    
-    # Recalculate
-    prog_received = 0
-    prog_milling = 0
-    prev_closing = 0
-    
-    for _, row in daily.iterrows():
-        stock_date = row['date']
-        received = row['quantity_quintals']
-        prog_received += received
-        issued = existing_issued.get(stock_date, 0)
-        prog_milling += issued
-        
-        opening = prev_closing
-        total = opening + received
-        closing = total - issued
-        prev_closing = closing
-        
-        add_row(SHEET_MASTER_STOCK, {
-            "id": get_next_id(SHEET_MASTER_STOCK),
-            "date": stock_date,
-            "kms_year": kms_year,
-            "opening_balance": opening,
-            "received_today": received,
-            "prog_received": prog_received,
-            "total": total,
-            "issued_milling": issued,
-            "prog_milling": prog_milling,
-            "closing_balance": closing,
-            "remarks": ""
-        })
 
 def to_excel(df):
     """Convert DataFrame to Excel bytes"""
@@ -684,8 +615,8 @@ def show_admin_dashboard():
     """Display admin dashboard"""
     st.title("🌾 Rice Mill - Admin Portal")
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📝 Admin Entry", "📊 Master Stock", "🔄 Comparison",
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📝 Admin Entry", "📊 Master Stock", "🏭 Milling", "🔄 Comparison",
         "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
     ])
     
@@ -791,33 +722,69 @@ def show_admin_dashboard():
             else:
                 st.info("ℹ️ No entries yet.")
     
-    # TAB 2: Master Stock
+    # TAB 2: Master Stock (Read-only, calculated from Admin Arrivals + Milling)
     with tab2:
-        st.subheader("Master Stock Register")
+        st.subheader("Master Stock Register (Read-Only)")
+        st.caption("📊 Auto-calculated from Admin Arrivals and Milling entries")
         
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            if st.button("🔄 Recalculate", use_container_width=True):
-                update_master_stock(kms_year)
-                st.success("✅ Recalculated!")
-                st.rerun()
+        # Get admin arrivals
+        admin_df = get_admin_arrivals(kms_year)
+        milling_df = get_all_data(SHEET_MILLING)
         
-        stock_df = get_master_stock(kms_year)
-        
-        if not stock_df.empty:
-            display_df = stock_df[['date', 'opening_balance', 'received_today', 'prog_received',
-                                   'total', 'issued_milling', 'prog_milling', 'closing_balance']].copy()
-            display_df.columns = ['Date', 'O/B', 'Received', 'Prog.Recv', 'Total', 
-                                 'Issue Mill', 'Prog.Mill', 'C/B']
+        if not admin_df.empty:
+            # Group admin arrivals by date
+            admin_df['quantity_quintals'] = pd.to_numeric(admin_df['quantity_quintals'], errors='coerce')
+            daily_received = admin_df.groupby('date')['quantity_quintals'].sum().reset_index()
+            daily_received.columns = ['date', 'received']
+            daily_received = daily_received.sort_values('date')
             
+            # Get milling data by date
+            milling_by_date = {}
+            if not milling_df.empty:
+                milling_kms = milling_df[milling_df['kms_year'] == kms_year]
+                if not milling_kms.empty:
+                    milling_kms['issued_quintals'] = pd.to_numeric(milling_kms['issued_quintals'], errors='coerce')
+                    for _, row in milling_kms.groupby('date')['issued_quintals'].sum().reset_index().iterrows():
+                        milling_by_date[row['date']] = row['issued_quintals']
+            
+            # Calculate master stock
+            stock_data = []
+            prog_received = 0
+            prog_milling = 0
+            prev_closing = 0
+            
+            for _, row in daily_received.iterrows():
+                stock_date = row['date']
+                received = row['received']
+                prog_received += received
+                issued = milling_by_date.get(stock_date, 0)
+                prog_milling += issued
+                
+                opening = prev_closing
+                total = opening + received
+                closing = total - issued
+                prev_closing = closing
+                
+                stock_data.append({
+                    'Date': stock_date,
+                    'O/B': round(opening, 2),
+                    'Received': round(received, 2),
+                    'Prog. Recv': round(prog_received, 2),
+                    'Total': round(total, 2),
+                    'Issue Mill': round(issued, 2),
+                    'Prog. Mill': round(prog_milling, 2),
+                    'C/B': round(closing, 2)
+                })
+            
+            display_df = pd.DataFrame(stock_data)
             st.dataframe(display_df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Received", f"{stock_df['received_today'].astype(float).sum():.2f} Q")
-            col2.metric("Total Issued", f"{stock_df['issued_milling'].astype(float).sum():.2f} Q")
-            col3.metric("Current Stock", f"{stock_df['closing_balance'].astype(float).iloc[-1]:.2f} Q")
-            col4.metric("Prog. Received", f"{stock_df['prog_received'].astype(float).iloc[-1]:.2f} Q")
+            col1.metric("Total Received", f"{prog_received:.2f} Q")
+            col2.metric("Total Issued", f"{prog_milling:.2f} Q")
+            col3.metric("Current Stock", f"{prev_closing:.2f} Q")
+            col4.metric("Prog. Received", f"{prog_received:.2f} Q")
             
             st.download_button(
                 "📥 Download Stock Register",
@@ -826,10 +793,71 @@ def show_admin_dashboard():
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.info("ℹ️ No stock data. Add arrivals first.")
+            st.info("ℹ️ No admin arrivals data. Add arrivals first.")
     
-    # TAB 3: Comparison
+    # TAB 3: Milling (Issue for Milling entry)
     with tab3:
+        st.subheader("Issue for Milling")
+        
+        entry_col, list_col = st.columns([1, 2])
+        
+        with entry_col:
+            st.markdown("##### ➕ Add Milling Entry")
+            
+            mill_date = st.date_input("Date", value=date.today(), key="mill_date")
+            mill_kms_year = get_kms_year_from_date(mill_date)
+            st.caption(f"📅 KMS Year: **{mill_kms_year}**")
+            
+            mill_qty = st.number_input("Issued Quantity (Quintals)", min_value=0.0, value=0.0, step=0.1, key="mill_qty")
+            mill_remarks = st.text_input("Remarks", key="mill_remarks")
+            
+            if st.button("💾 Add Milling Entry", type="primary", use_container_width=True):
+                if mill_qty <= 0:
+                    st.error("❌ Quantity must be greater than 0")
+                else:
+                    success = add_row(SHEET_MILLING, {
+                        "id": get_next_id(SHEET_MILLING),
+                        "date": str(mill_date),
+                        "kms_year": mill_kms_year,
+                        "issued_quintals": mill_qty,
+                        "remarks": mill_remarks,
+                        "entered_by": username,
+                        "entry_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+                    if success:
+                        st.success("✅ Milling entry added!")
+                        st.rerun()
+        
+        with list_col:
+            st.markdown("##### 📋 Milling Entries")
+            
+            milling_df = get_all_data(SHEET_MILLING)
+            
+            if not milling_df.empty:
+                milling_kms = milling_df[milling_df['kms_year'] == kms_year].sort_values('date', ascending=False)
+                
+                if not milling_kms.empty:
+                    for _, row in milling_kms.iterrows():
+                        cols = st.columns([2, 2, 2, 1])
+                        cols[0].write(f"📅 {row['date']}")
+                        cols[1].write(f"⚖️ {row['issued_quintals']} Q")
+                        cols[2].write(f"📝 {row.get('remarks', '') or '-'}")
+                        
+                        if cols[3].button("🗑️", key=f"del_mill_{row['id']}"):
+                            delete_row(SHEET_MILLING, row['id'])
+                            st.rerun()
+                    
+                    st.markdown("---")
+                    total_milling = milling_kms['issued_quintals'].astype(float).sum()
+                    st.markdown(f"### 📊 Total Issued: {total_milling:.2f} Q")
+                else:
+                    st.info("ℹ️ No milling entries for this KMS year.")
+            else:
+                st.info("ℹ️ No milling entries yet.")
+    
+    # TAB 4: Comparison
+    with tab4:
         st.subheader("Employee vs Admin Comparison")
         
         col1, col2 = st.columns(2)
@@ -880,8 +908,8 @@ def show_admin_dashboard():
         else:
             st.info("ℹ️ No data for comparison.")
     
-    # TAB 4: Employee Data
-    with tab4:
+    # TAB 5: Employee Data
+    with tab5:
         st.subheader("Employee Entries")
         
         emp_entries = get_employee_arrivals(kms_year)
@@ -893,8 +921,8 @@ def show_admin_dashboard():
         else:
             st.info("ℹ️ No employee entries.")
     
-    # TAB 5: Vehicles
-    with tab5:
+    # TAB 6: Vehicles
+    with tab6:
         st.subheader("Vehicle Registry")
         
         vcol1, vcol2 = st.columns([1, 2])
@@ -924,8 +952,8 @@ def show_admin_dashboard():
                 st.dataframe(vehicles_df[['vehicle_number', 'owner_name', 'is_active']], 
                             use_container_width=True, hide_index=True)
     
-    # TAB 6: Settings
-    with tab6:
+    # TAB 7: Settings
+    with tab7:
         settings_tab1, settings_tab2, settings_tab3 = st.tabs(["🏪 Mandis", "🏭 Godowns", "👥 Users"])
         
         with settings_tab1:
