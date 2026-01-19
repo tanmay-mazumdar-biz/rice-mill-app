@@ -66,16 +66,31 @@ def get_gsheet_connection():
             ]
         )
         client = gspread.authorize(credentials)
+        st.sidebar.success("✅ Connected to Google Sheets")
         return client
+    except KeyError:
+        st.error("❌ Missing secrets! Add gcp_service_account to Streamlit secrets.")
+        return None
     except Exception as e:
-        st.error(f"Failed to connect to Google Sheets: {e}")
+        st.error(f"❌ Failed to connect to Google Sheets: {e}")
         return None
 
 def get_spreadsheet():
     """Get the spreadsheet object"""
     client = get_gsheet_connection()
     if client:
-        return client.open_by_key(SHEET_ID)
+        try:
+            spreadsheet = client.open_by_key(SHEET_ID)
+            return spreadsheet
+        except gspread.SpreadsheetNotFound:
+            st.error(f"❌ Spreadsheet not found! Check SHEET_ID: {SHEET_ID}")
+            return None
+        except gspread.exceptions.APIError as e:
+            st.error(f"❌ API Error: {e}")
+            return None
+        except Exception as e:
+            st.error(f"❌ Error opening spreadsheet: {e}")
+            return None
     return None
 
 def get_or_create_worksheet(sheet_name, headers):
@@ -112,16 +127,28 @@ def init_sheets():
     
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
+        st.error("❌ Could not connect to spreadsheet. Check your secrets and permissions.")
         return
     
+    st.info(f"📊 Connected to spreadsheet: {spreadsheet.title}")
+    
     # Get existing sheet names
-    existing_sheets = [ws.title for ws in spreadsheet.worksheets()]
+    try:
+        existing_sheets = [ws.title for ws in spreadsheet.worksheets()]
+        st.info(f"📑 Existing sheets: {existing_sheets}")
+    except Exception as e:
+        st.error(f"❌ Error getting worksheets: {e}")
+        return
     
     for sheet_name, headers in sheets_config.items():
         if sheet_name not in existing_sheets:
-            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
-            worksheet.append_row(headers)
-            time.sleep(1)  # Rate limiting
+            try:
+                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
+                worksheet.append_row(headers)
+                st.success(f"✅ Created sheet: {sheet_name}")
+                time.sleep(1)  # Rate limiting
+            except Exception as e:
+                st.error(f"❌ Error creating {sheet_name}: {e}")
     
     # Add default data only if sheets are empty
     time.sleep(1)
@@ -168,6 +195,8 @@ def init_sheets():
                 "puc_expiry_date": "", "permit_number": "", "is_active": "1"
             })
             time.sleep(0.5)
+    
+    st.success("✅ Database initialized!")
 
 def get_all_data(sheet_name):
     """Get all data from a sheet as DataFrame - with caching"""
@@ -966,6 +995,10 @@ def show_admin_dashboard():
 # ============== MAIN ==============
 
 def main():
+    # Always show debug info
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Debug Info")
+    
     # Initialize sheets on first run
     if 'initialized' not in st.session_state:
         with st.spinner("Connecting to database..."):
