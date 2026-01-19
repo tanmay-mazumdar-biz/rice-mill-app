@@ -950,9 +950,10 @@ def show_admin_dashboard():
             else:
                 st.info("ℹ️ No milling entries yet.")
     
-    # TAB 4: Comparison
+    # TAB 4: Comparison (Side-by-side summaries)
     with tab4:
-        st.subheader("Employee vs Admin Comparison")
+        st.subheader("Employee vs Admin Data")
+        st.caption("📊 Side-by-side comparison of totals (dates may differ due to timing)")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -963,44 +964,67 @@ def show_admin_dashboard():
         emp_df = get_employee_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
         adm_df = get_admin_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
         
-        if not emp_df.empty or not adm_df.empty:
-            emp_daily = emp_df.groupby('date')['weight_quintals'].apply(lambda x: x.astype(float).sum()) if not emp_df.empty else pd.Series()
-            adm_daily = adm_df.groupby('date')['quantity_quintals'].apply(lambda x: x.astype(float).sum()) if not adm_df.empty else pd.Series()
+        # Overall Totals
+        emp_total = emp_df['weight_quintals'].astype(float).sum() if not emp_df.empty else 0
+        adm_total = adm_df['quantity_quintals'].astype(float).sum() if not adm_df.empty else 0
+        
+        st.markdown("### 📊 Overall Totals")
+        col1, col2 = st.columns(2)
+        col1.metric("Employee Total", f"{emp_total:,.2f} Q")
+        col2.metric("Admin Total", f"{adm_total:,.2f} Q")
+        
+        st.markdown("---")
+        
+        # Side-by-side breakdown
+        left_col, right_col = st.columns(2)
+        
+        with left_col:
+            st.markdown("### 👷 Employee Data")
             
-            all_dates = sorted(set(emp_daily.index) | set(adm_daily.index))
-            
-            comparison_data = []
-            for d in all_dates:
-                emp_val = emp_daily.get(d, 0)
-                adm_val = adm_daily.get(d, 0)
-                diff = emp_val - adm_val
+            if not emp_df.empty:
+                # By Mandi
+                st.markdown("##### By Mandi")
+                emp_by_mandi = emp_df.groupby('mandi_name')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
+                st.dataframe(emp_by_mandi.reset_index().rename(columns={'mandi_name': 'Mandi', 'weight_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
                 
-                if emp_val == 0:
-                    status = "❌ Missing Employee"
-                elif adm_val == 0:
-                    status = "❌ Missing Admin"
-                elif abs(diff) < 1:
-                    status = "✅ Match"
-                elif abs(diff) < 50:
-                    status = "⚠️ Minor Diff"
-                else:
-                    status = "❌ Major Diff"
+                # By Vehicle
+                st.markdown("##### By Vehicle")
+                emp_by_vehicle = emp_df.groupby('vehicle_number')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
+                st.dataframe(emp_by_vehicle.reset_index().rename(columns={'vehicle_number': 'Vehicle', 'weight_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
                 
-                comparison_data.append({
-                    'Date': d, 'Employee (Q)': emp_val, 'Admin (Q)': adm_val,
-                    'Difference': diff, 'Status': status
-                })
+                # By Date
+                st.markdown("##### By Date")
+                emp_by_date = emp_df.groupby('date')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_index()
+                st.dataframe(emp_by_date.reset_index().rename(columns={'date': 'Date', 'weight_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
+            else:
+                st.info("No employee data for this period")
+        
+        with right_col:
+            st.markdown("### 🔑 Admin Data")
             
-            comp_df = pd.DataFrame(comparison_data)
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Employee Total", f"{emp_daily.sum():.2f} Q")
-            col2.metric("Admin Total", f"{adm_daily.sum():.2f} Q")
-            col3.metric("Difference", f"{emp_daily.sum() - adm_daily.sum():+.2f} Q")
-            
-            st.dataframe(comp_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ No data for comparison.")
+            if not adm_df.empty:
+                # By Mandi
+                st.markdown("##### By Mandi")
+                adm_by_mandi = adm_df.groupby('mandi_name')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
+                st.dataframe(adm_by_mandi.reset_index().rename(columns={'mandi_name': 'Mandi', 'quantity_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
+                
+                # By Vehicle
+                st.markdown("##### By Vehicle")
+                adm_by_vehicle = adm_df.groupby('vehicle_number')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
+                st.dataframe(adm_by_vehicle.reset_index().rename(columns={'vehicle_number': 'Vehicle', 'quantity_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
+                
+                # By Date
+                st.markdown("##### By Date")
+                adm_by_date = adm_df.groupby('date')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_index()
+                st.dataframe(adm_by_date.reset_index().rename(columns={'date': 'Date', 'quantity_quintals': 'Quantity (Q)'}), 
+                            use_container_width=True, hide_index=True)
+            else:
+                st.info("No admin data for this period")
     
     # TAB 5: Employee Data
     with tab5:
