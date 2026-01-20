@@ -941,30 +941,29 @@ def show_admin_dashboard():
         </div>
     """, unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "🏠 Dashboard", "📝 Admin Entry", "📊 Master Stock", "🏭 Milling", "⛽ Diesel",
-        "🔄 Comparison", "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
+        "👁️ Employee Data", "🚛 Vehicles", "⚙️ Settings"
     ])
     
     kms_year = st.session_state['kms_year']
     username = st.session_state['username']
     
-    # TAB 1: Dashboard
+    # TAB 1: Dashboard (merged with Comparison)
     with tab1:
-        st.subheader("📊 Quick Overview")
+        st.subheader("📊 Dashboard & Comparison")
         
         # Get today's data
         today = date.today()
         today_str = str(today)
         
         # Get all data for dashboard
-        admin_df = get_admin_arrivals(kms_year)
-        emp_df = get_employee_arrivals(kms_year)
+        admin_df_all = get_admin_arrivals(kms_year)
+        emp_df_all = get_employee_arrivals(kms_year)
         milling_df = get_all_data(SHEET_MILLING)
-        diesel_df = get_all_data(SHEET_DIESEL)
         
         # Calculate totals
-        total_received = admin_df['quantity_quintals'].astype(float).sum() if not admin_df.empty else 0
+        total_received = admin_df_all['quantity_quintals'].astype(float).sum() if not admin_df_all.empty else 0
         
         total_milling = 0
         if not milling_df.empty:
@@ -975,8 +974,8 @@ def show_admin_dashboard():
         current_stock = total_received - total_milling
         
         # Today's entries
-        today_admin = admin_df[admin_df['date'] == today_str] if not admin_df.empty else pd.DataFrame()
-        today_emp = emp_df[emp_df['date'] == today_str] if not emp_df.empty else pd.DataFrame()
+        today_admin = admin_df_all[admin_df_all['date'] == today_str] if not admin_df_all.empty else pd.DataFrame()
+        today_emp = emp_df_all[emp_df_all['date'] == today_str] if not emp_df_all.empty else pd.DataFrame()
         
         # Summary cards
         col1, col2, col3, col4 = st.columns(4)
@@ -993,9 +992,9 @@ def show_admin_dashboard():
         with col1:
             st.markdown("##### 🚛 Vehicle Trips (This Month)")
             current_month = today.strftime("%Y-%m")
-            if not admin_df.empty:
-                admin_df['month'] = admin_df['date'].str[:7]
-                month_trips = admin_df[admin_df['month'] == current_month]
+            if not admin_df_all.empty:
+                admin_df_all['month'] = admin_df_all['date'].str[:7]
+                month_trips = admin_df_all[admin_df_all['month'] == current_month]
                 if not month_trips.empty:
                     trip_count = month_trips.groupby('vehicle_number').size().reset_index(name='Trips')
                     trip_count = trip_count.sort_values('Trips', ascending=False)
@@ -1007,18 +1006,149 @@ def show_admin_dashboard():
         
         with col2:
             st.markdown("##### 📈 Recent Activity")
-            # Show last 10 entries
-            if not admin_df.empty:
-                recent = admin_df.head(10)[['date', 'mandi_name', 'vehicle_number', 'quantity_quintals']]
+            if not admin_df_all.empty:
+                recent = admin_df_all.head(10)[['date', 'mandi_name', 'vehicle_number', 'quantity_quintals']]
                 recent.columns = ['Date', 'Mandi', 'Vehicle', 'Qty (Q)']
                 st.dataframe(recent, use_container_width=True, hide_index=True)
             else:
                 st.info("No recent activity")
         
+        st.markdown("---")
+        
+        # ========== COMPARISON SECTION ==========
+        st.markdown("### 🔄 Employee vs Admin Comparison")
+        st.caption("📊 Filter by date, mandi, or vehicle to compare data")
+        
+        # Filter row
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+        
+        with filter_col1:
+            comp_start = st.date_input("From Date", value=date.today() - timedelta(days=30), key="comp_start")
+        with filter_col2:
+            comp_end = st.date_input("To Date", value=date.today(), key="comp_end")
+        
+        # Get mandi and vehicle options for filters
+        mandis_df = get_all_data(SHEET_MANDIS)
+        vehicles_df = get_all_data(SHEET_VEHICLES)
+        
+        mandi_options = ["All"] + (mandis_df['mandi_name'].tolist() if not mandis_df.empty else [])
+        vehicle_options = ["All"] + (vehicles_df['vehicle_number'].tolist() if not vehicles_df.empty else [])
+        
+        with filter_col3:
+            filter_mandi = st.selectbox("🏪 Mandi", mandi_options, key="comp_mandi")
+        with filter_col4:
+            filter_vehicle = st.selectbox("🚛 Vehicle", vehicle_options, key="comp_vehicle")
+        
+        # Get filtered data
+        emp_df = get_employee_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
+        adm_df = get_admin_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
+        
+        # Apply mandi filter
+        if filter_mandi != "All":
+            emp_df = emp_df[emp_df['mandi_name'].str.contains(filter_mandi, na=False)] if not emp_df.empty else emp_df
+            adm_df = adm_df[adm_df['mandi_name'].str.contains(filter_mandi, na=False)] if not adm_df.empty else adm_df
+        
+        # Apply vehicle filter
+        if filter_vehicle != "All":
+            emp_df = emp_df[emp_df['vehicle_number'] == filter_vehicle] if not emp_df.empty else emp_df
+            adm_df = adm_df[adm_df['vehicle_number'] == filter_vehicle] if not adm_df.empty else adm_df
+        
+        # Overall Totals
+        emp_total = emp_df['weight_quintals'].astype(float).sum() if not emp_df.empty else 0
+        adm_total = adm_df['quantity_quintals'].astype(float).sum() if not adm_df.empty else 0
+        
+        col1, col2 = st.columns(2)
+        col1.metric("👷 Employee Total", f"{emp_total:,.2f} Q")
+        col2.metric("🔑 Admin Total", f"{adm_total:,.2f} Q")
+        
+        st.markdown("---")
+        
+        # Detailed filtered data table
+        st.markdown("##### 📋 Filtered Data (Date + Mandi + Vehicle)")
+        
+        # Create combined view
+        left_col, right_col = st.columns(2)
+        
+        with left_col:
+            st.markdown("**👷 Employee Entries**")
+            if not emp_df.empty:
+                emp_display = emp_df[['date', 'mandi_name', 'vehicle_number', 'weight_quintals']].copy()
+                emp_display.columns = ['Date', 'Mandi', 'Vehicle', 'Qty (Q)']
+                emp_display = emp_display.sort_values('Date', ascending=False)
+                st.dataframe(emp_display, use_container_width=True, hide_index=True, height=300)
+            else:
+                st.info("No employee data")
+        
+        with right_col:
+            st.markdown("**🔑 Admin Entries**")
+            if not adm_df.empty:
+                adm_display = adm_df[['date', 'mandi_name', 'vehicle_number', 'quantity_quintals']].copy()
+                adm_display.columns = ['Date', 'Mandi', 'Vehicle', 'Qty (Q)']
+                adm_display = adm_display.sort_values('Date', ascending=False)
+                st.dataframe(adm_display, use_container_width=True, hide_index=True, height=300)
+            else:
+                st.info("No admin data")
+        
+        st.markdown("---")
+        
+        # Summary by Mandi and Vehicle
+        st.markdown("##### 📊 Summary Breakdown")
+        
+        sum_col1, sum_col2 = st.columns(2)
+        
+        with sum_col1:
+            st.markdown("**By Mandi**")
+            if not emp_df.empty or not adm_df.empty:
+                # Get all mandis from both
+                all_mandis = set()
+                if not emp_df.empty:
+                    all_mandis.update(emp_df['mandi_name'].unique())
+                if not adm_df.empty:
+                    all_mandis.update(adm_df['mandi_name'].unique())
+                
+                mandi_comparison = []
+                for mandi in sorted(all_mandis):
+                    emp_qty = emp_df[emp_df['mandi_name'] == mandi]['weight_quintals'].astype(float).sum() if not emp_df.empty else 0
+                    adm_qty = adm_df[adm_df['mandi_name'] == mandi]['quantity_quintals'].astype(float).sum() if not adm_df.empty else 0
+                    mandi_comparison.append({
+                        'Mandi': mandi,
+                        'Employee (Q)': round(emp_qty, 2),
+                        'Admin (Q)': round(adm_qty, 2)
+                    })
+                
+                if mandi_comparison:
+                    st.dataframe(pd.DataFrame(mandi_comparison), use_container_width=True, hide_index=True)
+            else:
+                st.info("No data")
+        
+        with sum_col2:
+            st.markdown("**By Vehicle**")
+            if not emp_df.empty or not adm_df.empty:
+                # Get all vehicles from both
+                all_vehicles = set()
+                if not emp_df.empty:
+                    all_vehicles.update(emp_df['vehicle_number'].unique())
+                if not adm_df.empty:
+                    all_vehicles.update(adm_df['vehicle_number'].unique())
+                
+                vehicle_comparison = []
+                for vehicle in sorted(all_vehicles):
+                    emp_qty = emp_df[emp_df['vehicle_number'] == vehicle]['weight_quintals'].astype(float).sum() if not emp_df.empty else 0
+                    adm_qty = adm_df[adm_df['vehicle_number'] == vehicle]['quantity_quintals'].astype(float).sum() if not adm_df.empty else 0
+                    vehicle_comparison.append({
+                        'Vehicle': vehicle,
+                        'Employee (Q)': round(emp_qty, 2),
+                        'Admin (Q)': round(adm_qty, 2)
+                    })
+                
+                if vehicle_comparison:
+                    st.dataframe(pd.DataFrame(vehicle_comparison), use_container_width=True, hide_index=True)
+            else:
+                st.info("No data")
+        
         # Backup Reminder
         st.markdown("---")
-        st.markdown("##### 💾 Backup Reminder")
-        st.info("💡 **Tip:** Download Excel backups regularly from each tab to keep your data safe!")
+        st.info("💾 **Tip:** Download Excel backups regularly from each tab to keep your data safe!")
     
     # TAB 2: Admin Entry
     with tab2:
@@ -1436,84 +1566,8 @@ def show_admin_dashboard():
             else:
                 st.info("ℹ️ No diesel entries yet.")
     
-    # TAB 6: Comparison (Side-by-side summaries)
+    # TAB 6: Employee Data
     with tab6:
-        st.subheader("Employee vs Admin Data")
-        st.caption("📊 Side-by-side comparison of totals (dates may differ due to timing)")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            comp_start = st.date_input("From", value=date.today() - timedelta(days=30), key="comp_start")
-        with col2:
-            comp_end = st.date_input("To", value=date.today(), key="comp_end")
-        
-        emp_df = get_employee_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
-        adm_df = get_admin_arrivals(kms_year, start_date=comp_start, end_date=comp_end)
-        
-        # Overall Totals
-        emp_total = emp_df['weight_quintals'].astype(float).sum() if not emp_df.empty else 0
-        adm_total = adm_df['quantity_quintals'].astype(float).sum() if not adm_df.empty else 0
-        
-        st.markdown("### 📊 Overall Totals")
-        col1, col2 = st.columns(2)
-        col1.metric("Employee Total", f"{emp_total:,.2f} Q")
-        col2.metric("Admin Total", f"{adm_total:,.2f} Q")
-        
-        st.markdown("---")
-        
-        # Side-by-side breakdown
-        left_col, right_col = st.columns(2)
-        
-        with left_col:
-            st.markdown("### 👷 Employee Data")
-            
-            if not emp_df.empty:
-                # By Mandi
-                st.markdown("##### By Mandi")
-                emp_by_mandi = emp_df.groupby('mandi_name')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
-                st.dataframe(emp_by_mandi.reset_index().rename(columns={'mandi_name': 'Mandi', 'weight_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-                
-                # By Vehicle
-                st.markdown("##### By Vehicle")
-                emp_by_vehicle = emp_df.groupby('vehicle_number')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
-                st.dataframe(emp_by_vehicle.reset_index().rename(columns={'vehicle_number': 'Vehicle', 'weight_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-                
-                # By Date
-                st.markdown("##### By Date")
-                emp_by_date = emp_df.groupby('date')['weight_quintals'].apply(lambda x: x.astype(float).sum()).sort_index()
-                st.dataframe(emp_by_date.reset_index().rename(columns={'date': 'Date', 'weight_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-            else:
-                st.info("No employee data for this period")
-        
-        with right_col:
-            st.markdown("### 🔑 Admin Data")
-            
-            if not adm_df.empty:
-                # By Mandi
-                st.markdown("##### By Mandi")
-                adm_by_mandi = adm_df.groupby('mandi_name')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
-                st.dataframe(adm_by_mandi.reset_index().rename(columns={'mandi_name': 'Mandi', 'quantity_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-                
-                # By Vehicle
-                st.markdown("##### By Vehicle")
-                adm_by_vehicle = adm_df.groupby('vehicle_number')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_values(ascending=False)
-                st.dataframe(adm_by_vehicle.reset_index().rename(columns={'vehicle_number': 'Vehicle', 'quantity_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-                
-                # By Date
-                st.markdown("##### By Date")
-                adm_by_date = adm_df.groupby('date')['quantity_quintals'].apply(lambda x: x.astype(float).sum()).sort_index()
-                st.dataframe(adm_by_date.reset_index().rename(columns={'date': 'Date', 'quantity_quintals': 'Quantity (Q)'}), 
-                            use_container_width=True, hide_index=True)
-            else:
-                st.info("No admin data for this period")
-    
-    # TAB 7: Employee Data
-    with tab7:
         st.subheader("Employee Entries")
         
         # Add search/filter
@@ -1545,8 +1599,8 @@ def show_admin_dashboard():
         else:
             st.info("ℹ️ No employee entries.")
     
-    # TAB 8: Vehicles
-    with tab8:
+    # TAB 7: Vehicles
+    with tab7:
         st.subheader("Vehicle Registry")
         
         vcol1, vcol2 = st.columns([1, 2])
@@ -1576,8 +1630,8 @@ def show_admin_dashboard():
                 st.dataframe(vehicles_df[['vehicle_number', 'owner_name', 'is_active']], 
                             use_container_width=True, hide_index=True)
     
-    # TAB 9: Settings
-    with tab9:
+    # TAB 8: Settings
+    with tab8:
         settings_tab1, settings_tab2, settings_tab3 = st.tabs(["🏪 Mandis", "🏭 Godowns", "👥 Users"])
         
         with settings_tab1:
