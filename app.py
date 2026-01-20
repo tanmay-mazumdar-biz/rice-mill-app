@@ -134,21 +134,27 @@ st.markdown("""
     /* Tab styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        background-color: #E8F5E9;
+        background-color: #1B5E20;
         padding: 0.5rem;
         border-radius: 10px;
     }
     
     .stTabs [data-baseweb="tab"] {
-        background-color: white;
+        background-color: #E8F5E9;
         border-radius: 8px;
         padding: 0.5rem 1rem;
         font-weight: 500;
+        color: #1B5E20 !important;
     }
     
     .stTabs [aria-selected="true"] {
-        background-color: #2E7D32 !important;
-        color: white !important;
+        background-color: #F9A825 !important;
+        color: #1B5E20 !important;
+        font-weight: 600 !important;
+    }
+    
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #C8E6C9;
     }
     
     /* Form styling */
@@ -678,7 +684,7 @@ def show_employee_dashboard():
         col1, col2 = st.columns(2)
         
         with col1:
-            entry_date = st.date_input("Date", value=date.today(), max_value=date.today())
+            entry_date = st.date_input("Date", value=date.today(), max_value=date.today(), key="emp_entry_date")
             entry_kms_year = get_kms_year_from_date(entry_date)
             st.caption(f"📅 KMS Year: **{entry_kms_year}**")
             
@@ -689,35 +695,39 @@ def show_employee_dashboard():
             mandis_df = get_all_data(SHEET_MANDIS)
             if not mandis_df.empty:
                 mandi_options = mandis_df['mandi_name'].tolist()
-                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options)
+                # Use expander for mandi selection
+                with st.expander("🏪 Select Mandi (click to expand)", expanded=False):
+                    selected_mandis = st.multiselect("Choose one or more", mandi_options, key="emp_mandi", label_visibility="collapsed")
                 selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
                 if selected_mandi:
-                    st.info(f"📍 Selected: **{selected_mandi}**")
+                    st.success(f"📍 **{selected_mandi}**")
             else:
                 st.warning("⚠️ No mandis configured.")
                 selected_mandi = None
             
-            bags = st.number_input("Number of Bags", min_value=0, value=0, step=1)
+            bags = st.number_input("Number of Bags", min_value=0, value=0, step=1, key="emp_bags")
         
         with col2:
             vehicles_df = get_all_data(SHEET_VEHICLES)
             vehicles_df = vehicles_df[vehicles_df['is_active'].astype(str) == '1'] if not vehicles_df.empty else vehicles_df
             
             if not vehicles_df.empty:
-                vehicle_options = vehicles_df['vehicle_number'].tolist()
-                selected_vehicle = st.selectbox("Vehicle Number", vehicle_options)
+                vehicle_options = [""] + vehicles_df['vehicle_number'].tolist()
+                selected_vehicle = st.selectbox("Vehicle Number", vehicle_options, key="emp_vehicle")
+                selected_vehicle = selected_vehicle if selected_vehicle else None
             else:
                 st.warning("⚠️ No vehicles registered.")
                 selected_vehicle = None
             
             godowns_df = get_all_data(SHEET_GODOWNS)
             if not godowns_df.empty:
-                godown_options = godowns_df['godown_name'].tolist()
-                selected_godown = st.selectbox("Godown", godown_options)
+                godown_options = [""] + godowns_df['godown_name'].tolist()
+                selected_godown = st.selectbox("Godown", godown_options, key="emp_godown")
+                selected_godown = selected_godown if selected_godown else None
             else:
                 selected_godown = None
             
-            weight = st.number_input("Actual Weight (Quintals)", min_value=0.0, value=0.0, step=0.1)
+            weight = st.number_input("Actual Weight (Quintals)", min_value=0.0, value=0.0, step=0.1, key="emp_weight")
         
         # Auto-calculated fields
         if bags > 0:
@@ -737,7 +747,7 @@ def show_employee_dashboard():
             expected_weight = 0
             difference = 0
         
-        remarks = st.text_input("Remarks (Optional)")
+        remarks = st.text_input("Remarks (Optional)", key="emp_remarks")
         
         st.markdown("---")
         
@@ -770,6 +780,11 @@ def show_employee_dashboard():
                 if success:
                     st.success("✅ Entry saved successfully!")
                     st.balloons()
+                    # Clear form fields
+                    for key in ['emp_mandi', 'emp_vehicle', 'emp_godown', 'emp_bags', 'emp_weight', 'emp_remarks']:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun()
     
     # TAB 2: My Entries
     with tab2:
@@ -796,20 +811,40 @@ def show_employee_dashboard():
             if 'edit_emp_id' not in st.session_state:
                 st.session_state['edit_emp_id'] = None
             
+            # Get dropdown options for edit forms
+            mandis_list = get_all_data(SHEET_MANDIS)['mandi_name'].tolist() if not get_all_data(SHEET_MANDIS).empty else []
+            vehicles_df = get_all_data(SHEET_VEHICLES)
+            vehicles_list = vehicles_df[vehicles_df['is_active'].astype(str) == '1']['vehicle_number'].tolist() if not vehicles_df.empty else []
+            godowns_list = get_all_data(SHEET_GODOWNS)['godown_name'].tolist() if not get_all_data(SHEET_GODOWNS).empty else []
+            
             for _, row in entries_df.iterrows():
                 row_id = row['id']
                 
                 # Check if this row is being edited
                 if st.session_state['edit_emp_id'] == row_id:
-                    # Edit form
+                    # Edit form with dropdowns
                     with st.form(key=f"edit_emp_form_{row_id}"):
                         st.markdown(f"**Editing entry from {row['date']}**")
                         edit_cols = st.columns([2, 2, 1, 1, 1])
-                        edit_mandi = edit_cols[0].text_input("Mandi", value=row['mandi_name'], key=f"edit_emp_mandi_{row_id}")
-                        edit_vehicle = edit_cols[1].text_input("Vehicle", value=row['vehicle_number'], key=f"edit_emp_vehicle_{row_id}")
+                        
+                        # Mandi dropdown
+                        current_mandi = row['mandi_name']
+                        mandi_idx = mandis_list.index(current_mandi) if current_mandi in mandis_list else 0
+                        edit_mandi = edit_cols[0].selectbox("Mandi", mandis_list, index=mandi_idx, key=f"edit_emp_mandi_{row_id}")
+                        
+                        # Vehicle dropdown
+                        current_vehicle = row['vehicle_number']
+                        vehicle_idx = vehicles_list.index(current_vehicle) if current_vehicle in vehicles_list else 0
+                        edit_vehicle = edit_cols[1].selectbox("Vehicle", vehicles_list, index=vehicle_idx, key=f"edit_emp_vehicle_{row_id}")
+                        
                         edit_bags = edit_cols[2].number_input("Bags", value=int(row['bags']), key=f"edit_emp_bags_{row_id}")
                         edit_weight = edit_cols[3].number_input("Weight", value=float(row['weight_quintals']), key=f"edit_emp_weight_{row_id}")
-                        edit_godown = edit_cols[4].text_input("Godown", value=row['godown'] or '', key=f"edit_emp_godown_{row_id}")
+                        
+                        # Godown dropdown
+                        current_godown = row['godown'] or ''
+                        godown_options = [''] + godowns_list
+                        godown_idx = godown_options.index(current_godown) if current_godown in godown_options else 0
+                        edit_godown = edit_cols[4].selectbox("Godown", godown_options, index=godown_idx, key=f"edit_emp_godown_{row_id}")
                         
                         # Recalculate expected and difference
                         new_expected = round(edit_bags * WEIGHT_PER_BAG, 2)
@@ -1001,10 +1036,12 @@ def show_admin_dashboard():
             mandis_df = get_all_data(SHEET_MANDIS)
             if not mandis_df.empty:
                 mandi_options = mandis_df['mandi_name'].tolist()
-                selected_mandis = st.multiselect("Mandi (select one or more)", mandi_options, key="admin_mandi")
+                # Use expander for mandi selection
+                with st.expander("🏪 Select Mandi (click to expand)", expanded=False):
+                    selected_mandis = st.multiselect("Choose one or more", mandi_options, key="admin_mandi", label_visibility="collapsed")
                 selected_mandi = " + ".join(selected_mandis) if selected_mandis else None
                 if selected_mandi:
-                    st.info(f"📍 Selected: **{selected_mandi}**")
+                    st.success(f"📍 **{selected_mandi}**")
             else:
                 selected_mandi = None
             
@@ -1012,12 +1049,13 @@ def show_admin_dashboard():
             vehicles_df = vehicles_df[vehicles_df['is_active'].astype(str) == '1'] if not vehicles_df.empty else vehicles_df
             
             if not vehicles_df.empty:
-                selected_vehicle = st.selectbox("Vehicle/Truck", vehicles_df['vehicle_number'].tolist(), key="admin_vehicle")
+                selected_vehicle = st.selectbox("Vehicle/Truck", [""] + vehicles_df['vehicle_number'].tolist(), key="admin_vehicle")
+                selected_vehicle = selected_vehicle if selected_vehicle else None
             else:
                 selected_vehicle = None
             
-            ac_note = st.text_input("A/C Note Number")
-            quantity = st.number_input("Quantity (Quintals)", min_value=0.0, value=0.0, step=0.1)
+            ac_note = st.text_input("A/C Note Number", key="admin_ac_note")
+            quantity = st.number_input("Quantity (Quintals)", min_value=0.0, value=0.0, step=0.1, key="admin_qty")
             remarks = st.text_input("Remarks", key="admin_remarks")
             
             if st.button("💾 Add Entry", type="primary", use_container_width=True):
@@ -1043,6 +1081,10 @@ def show_admin_dashboard():
                     
                     if success:
                         st.success("✅ Entry added!")
+                        # Clear form fields by removing keys from session state
+                        for key in ['admin_mandi', 'admin_vehicle', 'admin_ac_note', 'admin_qty', 'admin_remarks']:
+                            if key in st.session_state:
+                                del st.session_state[key]
                         st.rerun()
         
         with list_col:
@@ -1062,6 +1104,11 @@ def show_admin_dashboard():
                 if 'edit_admin_id' not in st.session_state:
                     st.session_state['edit_admin_id'] = None
                 
+                # Get dropdown options for edit forms
+                mandis_list = get_all_data(SHEET_MANDIS)['mandi_name'].tolist() if not get_all_data(SHEET_MANDIS).empty else []
+                vehicles_list = get_all_data(SHEET_VEHICLES)
+                vehicles_list = vehicles_list[vehicles_list['is_active'].astype(str) == '1']['vehicle_number'].tolist() if not vehicles_list.empty else []
+                
                 for date_val in admin_df['date'].unique():
                     day_data = admin_df[admin_df['date'] == date_val]
                     daily_total = day_data['quantity_quintals'].astype(float).sum()
@@ -1073,11 +1120,20 @@ def show_admin_dashboard():
                         
                         # Check if this row is being edited
                         if st.session_state['edit_admin_id'] == row_id:
-                            # Edit form
+                            # Edit form with dropdowns
                             with st.form(key=f"edit_admin_form_{row_id}"):
                                 edit_cols = st.columns([2, 2, 1, 1])
-                                edit_mandi = edit_cols[0].text_input("Mandi", value=row['mandi_name'], key=f"edit_mandi_{row_id}")
-                                edit_vehicle = edit_cols[1].text_input("Vehicle", value=row['vehicle_number'], key=f"edit_vehicle_{row_id}")
+                                
+                                # Mandi dropdown
+                                current_mandi = row['mandi_name']
+                                mandi_idx = mandis_list.index(current_mandi) if current_mandi in mandis_list else 0
+                                edit_mandi = edit_cols[0].selectbox("Mandi", mandis_list, index=mandi_idx, key=f"edit_mandi_{row_id}")
+                                
+                                # Vehicle dropdown
+                                current_vehicle = row['vehicle_number']
+                                vehicle_idx = vehicles_list.index(current_vehicle) if current_vehicle in vehicles_list else 0
+                                edit_vehicle = edit_cols[1].selectbox("Vehicle", vehicles_list, index=vehicle_idx, key=f"edit_vehicle_{row_id}")
+                                
                                 edit_ac = edit_cols[2].text_input("A/C", value=row['ac_note'] or '', key=f"edit_ac_{row_id}")
                                 edit_qty = edit_cols[3].number_input("Qty", value=float(row['quantity_quintals']), key=f"edit_qty_{row_id}")
                                 
