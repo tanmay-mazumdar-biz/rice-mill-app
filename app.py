@@ -1,5 +1,5 @@
 """
-Rice Mill Procurement System v2.0
+Shiva Shankar Modern Rice Mill - Procurement System v2.0
 With Google Sheets Integration for Permanent Data Storage
 """
 
@@ -12,11 +12,191 @@ from google.oauth2.service_account import Credentials
 
 # Page configuration
 st.set_page_config(
-    page_title="Rice Mill Procurement System",
+    page_title="Shiva Shankar Modern Rice Mill",
     page_icon="🌾",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Custom CSS for professional UI
+st.markdown("""
+<style>
+    /* Main theme colors */
+    :root {
+        --primary-green: #2E7D32;
+        --primary-gold: #F9A825;
+        --light-green: #E8F5E9;
+        --dark-text: #1B5E20;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Header styling */
+    .main-header {
+        background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%);
+        padding: 1.5rem 2rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .main-header h1 {
+        color: white;
+        margin: 0;
+        font-size: 1.8rem;
+        font-weight: 600;
+    }
+    
+    .main-header p {
+        color: #C8E6C9;
+        margin: 0.5rem 0 0 0;
+        font-size: 1rem;
+    }
+    
+    /* Login card styling */
+    .login-container {
+        max-width: 400px;
+        margin: 2rem auto;
+        padding: 2rem;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+    }
+    
+    .login-header {
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    
+    .login-header h2 {
+        color: #2E7D32;
+        margin-bottom: 0.5rem;
+    }
+    
+    .login-logo {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+    }
+    
+    /* Metric cards styling */
+    .metric-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f5f5f5 100%);
+        padding: 1.2rem;
+        border-radius: 10px;
+        border-left: 4px solid #2E7D32;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        margin-bottom: 1rem;
+    }
+    
+    .metric-card-gold {
+        border-left-color: #F9A825;
+    }
+    
+    .metric-card-blue {
+        border-left-color: #1976D2;
+    }
+    
+    .metric-card-red {
+        border-left-color: #D32F2F;
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1B5E20 0%, #2E7D32 100%);
+    }
+    
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        color: white;
+    }
+    
+    [data-testid="stSidebar"] .stSelectbox label {
+        color: white !important;
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #1B5E20 0%, #0D3D12 100%);
+        box-shadow: 0 4px 12px rgba(46,125,50,0.4);
+    }
+    
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #E8F5E9;
+        padding: 0.5rem;
+        border-radius: 10px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background-color: white;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #2E7D32 !important;
+        color: white !important;
+    }
+    
+    /* Form styling */
+    .stTextInput > div > div > input {
+        border-radius: 8px;
+        border: 2px solid #E0E0E0;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #2E7D32;
+        box-shadow: 0 0 0 2px rgba(46,125,50,0.2);
+    }
+    
+    /* Dataframe styling */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    
+    /* Success/Error messages */
+    .stSuccess {
+        background-color: #E8F5E9;
+        border-left: 4px solid #2E7D32;
+        border-radius: 8px;
+    }
+    
+    .stError {
+        border-radius: 8px;
+    }
+    
+    /* Section headers */
+    .section-header {
+        background: #E8F5E9;
+        padding: 0.8rem 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        border-left: 4px solid #2E7D32;
+    }
+    
+    /* Divider */
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, #2E7D32, #F9A825, #2E7D32);
+        margin: 1.5rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Constants
 WEIGHT_PER_BAG = 0.51  # Quintals per bag (51 kg)
@@ -369,21 +549,38 @@ def to_excel(df):
 # ============== UI COMPONENTS ==============
 
 def show_login_page():
-    """Display login page"""
-    st.markdown("""
-        <div style='text-align: center; padding: 50px;'>
-            <h1>🌾 Rice Mill Procurement System</h1>
-            <p style='color: #666;'>Please login to continue</p>
-        </div>
-    """, unsafe_allow_html=True)
+    """Display login page with professional branding"""
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Center the login form
+    col1, col2, col3 = st.columns([1, 1.5, 1])
     
     with col2:
+        # Logo and branding
+        st.markdown("""
+            <div style='text-align: center; padding: 2rem 0;'>
+                <div style='font-size: 5rem; margin-bottom: 1rem;'>🌾</div>
+                <h1 style='color: #2E7D32; margin: 0; font-size: 1.8rem; font-weight: 700;'>
+                    Shiva Shankar
+                </h1>
+                <h2 style='color: #1B5E20; margin: 0.2rem 0 1rem 0; font-size: 1.3rem; font-weight: 500;'>
+                    Modern Rice Mill
+                </h2>
+                <p style='color: #666; font-size: 0.95rem;'>Procurement Management System</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Login form with styled container
+        st.markdown("""
+            <div style='background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%); 
+                        padding: 0.5rem; border-radius: 15px; margin: 1rem 0;'>
+            </div>
+        """, unsafe_allow_html=True)
+        
         with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("🔐 Login", use_container_width=True)
+            st.markdown("#### 🔐 Login")
+            username = st.text_input("Username", placeholder="Enter your username")
+            password = st.text_input("Password", type="password", placeholder="Enter your password")
+            submit = st.form_submit_button("Login", use_container_width=True)
             
             if submit:
                 if username and password:
@@ -400,41 +597,74 @@ def show_login_page():
                 else:
                     st.warning("⚠️ Please enter username and password")
         
-        st.markdown("---")
+        # Footer
         st.markdown("""
-            <div style='text-align: center; color: #888; font-size: 12px;'>
-                <p>Default Admin: admin / admin123</p>
+            <div style='text-align: center; margin-top: 2rem; padding: 1rem; 
+                        background: #f5f5f5; border-radius: 10px;'>
+                <p style='color: #888; font-size: 0.8rem; margin: 0;'>
+                    📍 Powered by Streamlit | © 2026 Shiva Shankar Modern Rice Mill
+                </p>
             </div>
         """, unsafe_allow_html=True)
 
 def show_sidebar():
-    """Display sidebar"""
+    """Display sidebar with branding"""
     with st.sidebar:
+        # Sidebar header with branding
+        st.markdown("""
+            <div style='text-align: center; padding: 1rem 0; margin-bottom: 1rem;'>
+                <div style='font-size: 2.5rem;'>🌾</div>
+                <p style='color: white; font-weight: 600; margin: 0.5rem 0 0 0; font-size: 1.1rem;'>SSMRM</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # User info
         st.markdown(f"### 👤 {st.session_state['full_name']}")
-        st.markdown(f"**Role:** {'🔑 Admin' if st.session_state['role'] == 'admin' else '👷 Employee'}")
+        role_badge = "🔑 Admin" if st.session_state['role'] == 'admin' else "👷 Employee"
+        st.markdown(f"**Role:** {role_badge}")
         
         st.markdown("---")
         
         # KMS Year Selection
-        st.subheader("📅 KMS Year")
+        st.markdown("##### 📅 KMS Year")
         current_kms = get_current_kms_year()
         current_start = int(current_kms.split("-")[0])
         year_options = [f"{y}-{str(y+1)[-2:]}" for y in range(current_start-2, current_start+2)]
         default_idx = year_options.index(current_kms) if current_kms in year_options else 0
         kms_year = st.selectbox("Select Year", year_options, index=default_idx, label_visibility="collapsed")
         st.session_state['kms_year'] = kms_year
-        st.caption(f"Current KMS: {current_kms}")
+        st.caption(f"📆 Current: {current_kms}")
         
         st.markdown("---")
         
+        # Logout button
         if st.button("🚪 Logout", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+        
+        # Sidebar footer
+        st.markdown("---")
+        st.markdown("""
+            <div style='text-align: center; padding: 0.5rem;'>
+                <p style='color: rgba(255,255,255,0.7); font-size: 0.7rem; margin: 0;'>
+                    v2.0 | 2026
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
 
 def show_employee_dashboard():
     """Display employee dashboard"""
-    st.title("🌾 Rice Mill - Employee Portal")
+    
+    # Professional header
+    st.markdown("""
+        <div class='main-header'>
+            <h1>🌾 Shiva Shankar Modern Rice Mill</h1>
+            <p>Employee Portal - Paddy Procurement System</p>
+        </div>
+    """, unsafe_allow_html=True)
     
     tab1, tab2, tab3 = st.tabs(["📝 New Entry", "📋 My Entries", "📊 My Summary"])
     
@@ -667,7 +897,14 @@ def show_employee_dashboard():
 
 def show_admin_dashboard():
     """Display admin dashboard"""
-    st.title("🌾 Rice Mill - Admin Portal")
+    
+    # Professional header
+    st.markdown("""
+        <div class='main-header'>
+            <h1>🌾 Shiva Shankar Modern Rice Mill</h1>
+            <p>Admin Portal - Procurement Management System</p>
+        </div>
+    """, unsafe_allow_html=True)
     
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "🏠 Dashboard", "📝 Admin Entry", "📊 Master Stock", "🏭 Milling", "⛽ Diesel",
